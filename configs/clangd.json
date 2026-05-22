@@ -1,0 +1,80 @@
+{
+  "provider": "clangd",
+  "lsp_name": "clangd",
+  "filetypes": ["c", "cpp", "h", "hpp"],
+  "sections": [
+    {
+      "id": "cpp_standard",
+      "title": "C++ Standard",
+      "kind": "radio",
+      "apply_to": "compile_flags",
+      "flag_prefix": "-std=",
+      "items": [
+        { "name": "c++98",  "desc": "C++98" },
+        { "name": "c++03",  "desc": "C++03" },
+        { "name": "c++11",  "desc": "C++11" },
+        { "name": "c++14",  "desc": "C++14" },
+        { "name": "c++17",  "desc": "C++17", "default": true },
+        { "name": "c++20",  "desc": "C++20" },
+        { "name": "c++23",  "desc": "C++23" },
+        { "name": "c++26",  "desc": "C++26" }
+      ]
+    },
+    {
+      "id": "compiler_flags",
+      "title": "Compiler Flags",
+      "kind": "toggle",
+      "apply_to": "compile_flags",
+      "items": [
+        { "name": "-Wall",                   "desc": "Common warnings" },
+        { "name": "-Wextra",                 "desc": "Extra warnings" },
+        { "name": "-Wpedantic",              "desc": "ISO conformance" },
+        { "name": "-Weverything",            "desc": "All clang warnings (verbose)" },
+        { "name": "-Wshadow",                "desc": "Variable shadowing" },
+        { "name": "-Wnon-virtual-dtor",      "desc": "Non-virtual destructor" },
+        { "name": "-Wold-style-cast",        "desc": "C-style casts" },
+        { "name": "-Wcast-align",            "desc": "Alignment-increasing casts" },
+        { "name": "-Wunused",                "desc": "Unused entities" },
+        { "name": "-Woverloaded-virtual",    "desc": "Hidden virtual overloads" },
+        { "name": "-Wconversion",            "desc": "Implicit conversions" },
+        { "name": "-Wsign-conversion",       "desc": "Sign conversions" },
+        { "name": "-Wmisleading-indentation","desc": "Misleading indentation" },
+        { "name": "-Wnull-dereference",      "desc": "Null dereference" },
+        { "name": "-Wdouble-promotion",      "desc": "float->double promotion" },
+        { "name": "-Wformat=2",              "desc": "Strict format strings" },
+        { "name": "-Wimplicit-fallthrough",  "desc": "Switch fallthrough" },
+        { "name": "-Wlifetime",              "desc": "Lifetime/dangling pointers" }
+      ]
+    },
+    {
+      "id": "clang_tidy",
+      "title": "Clang-Tidy Categories",
+      "kind": "category",
+      "apply_to": "clang_tidy",
+      "expandable": true,
+      "items": [
+        { "name": "modernize-*",         "desc": "Modern C++" },
+        { "name": "readability-*",       "desc": "Readability" },
+        { "name": "performance-*",       "desc": "Performance" },
+        { "name": "bugprone-*",          "desc": "Bug-prone patterns" },
+        { "name": "cppcoreguidelines-*", "desc": "Core Guidelines" },
+        { "name": "clang-analyzer-*",    "desc": "Static analyzer" },
+        { "name": "misc-*",              "desc": "Miscellaneous" },
+        { "name": "cert-*",              "desc": "CERT" },
+        { "name": "google-*",            "desc": "Google style" },
+        { "name": "hicpp-*",             "desc": "High Integrity C++" },
+        { "name": "portability-*",       "desc": "Portability" },
+        { "name": "concurrency-*",       "desc": "Concurrency" },
+        { "name": "llvm-*",              "desc": "LLVM" },
+        { "name": "abseil-*",            "desc": "Abseil" },
+        { "name": "boost-*",             "desc": "Boost" },
+        { "name": "android-*",           "desc": "Android" },
+        { "name": "fuchsia-*",           "desc": "Fuchsia" },
+        { "name": "linuxkernel-must-check-errs", "desc": "Linux Kernel" },
+        { "name": "mpi-*",               "desc": "MPI" },
+        { "name": "openmp-*",            "desc": "OpenMP" },
+        { "name": "zircon-*",            "desc": "Zircon" }
+      ]
+    }
+  ]
+}

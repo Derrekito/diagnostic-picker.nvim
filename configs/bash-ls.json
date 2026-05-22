@@ -1,0 +1,23 @@
+{
+  "provider": "bash-ls",
+  "lsp_name": "bashls",
+  "filetypes": ["sh", "bash", "zsh"],
+  "sections": [
+    {
+      "id": "shellcheck",
+      "title": "ShellCheck",
+      "kind": "toggle",
+      "apply_to": "lsp_settings",
+      "settings_path": "shellcheck",
+      "items": [
+        { "name": "SC2034", "desc": "Unused variables",               "default": true },
+        { "name": "SC2046", "desc": "Quote command substitution",     "default": true },
+        { "name": "SC2086", "desc": "Double-quote expansions",        "default": true },
+        { "name": "SC2155", "desc": "Declare and assign separately",  "default": true },
+        { "name": "SC1091", "desc": "Sourced file not found",         "default": false },
+        { "name": "SC2164", "desc": "Use cd ... || exit",             "default": true },
+        { "name": "SC2206", "desc": "Avoid splitting in arrays",      "default": true }
+      ]
+    }
+  ]
+}

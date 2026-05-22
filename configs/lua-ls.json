@@ -1,0 +1,32 @@
+{
+  "provider": "lua-ls",
+  "lsp_name": "lua_ls",
+  "filetypes": ["lua"],
+  "sections": [
+    { "id": "undefined-global",     "title": "undefined-global",     "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Undefined global variable",          "default": true  },
+    { "id": "unused-local",         "title": "unused-local",         "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Unused local variable",              "default": true  },
+    { "id": "unused-function",      "title": "unused-function",      "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Unused function",                    "default": true  },
+    { "id": "unused-label",         "title": "unused-label",         "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Unused label",                       "default": true  },
+    { "id": "redefined-local",      "title": "redefined-local",      "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Variable shadows outer local",       "default": true  },
+    { "id": "deprecated",           "title": "deprecated",           "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Deprecated API usage",               "default": true  },
+    { "id": "missing-return",       "title": "missing-return",       "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Function missing return",            "default": true  },
+    { "id": "missing-parameter",    "title": "missing-parameter",    "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Missing function parameter",         "default": true  },
+    { "id": "param-type-mismatch",  "title": "param-type-mismatch",  "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Parameter type mismatch",            "default": true  },
+    { "id": "return-type-mismatch", "title": "return-type-mismatch", "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Return type mismatch",               "default": true  },
+    { "id": "cast-type-mismatch",   "title": "cast-type-mismatch",   "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Cast type mismatch",                 "default": true  },
+    { "id": "need-check-nil",       "title": "need-check-nil",       "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Value may be nil",                   "default": true  },
+    { "id": "undefined-field",      "title": "undefined-field",      "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Access to undefined field",          "default": true  },
+    { "id": "inject-field",         "title": "inject-field",         "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Injecting field into sealed class",  "default": true  },
+    { "id": "missing-fields",       "title": "missing-fields",       "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Missing required fields in table",   "default": true  },
+    { "id": "duplicate-index",      "title": "duplicate-index",      "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Duplicate table index",              "default": true  },
+    { "id": "duplicate-set-field",  "title": "duplicate-set-field",  "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Duplicate field assignment",         "default": true  },
+    { "id": "count-down-loop",      "title": "count-down-loop",      "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Likely infinite count-down loop",    "default": true  },
+    { "id": "unreachable-code",     "title": "unreachable-code",     "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Unreachable code",                   "default": true  },
+    { "id": "code-after-break",     "title": "code-after-break",     "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Code after break statement",         "default": true  },
+    { "id": "spell-check",          "title": "spell-check",          "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Spell check in strings/comments",    "default": false },
+    { "id": "codestyle-check",      "title": "codestyle-check",      "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Code style violations",              "default": false },
+    { "id": "trailing-space",       "title": "trailing-space",       "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Trailing whitespace",                "default": false },
+    { "id": "lowercase-global",     "title": "lowercase-global",     "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Global defined with lowercase name", "default": false },
+    { "id": "global-element",       "title": "global-element",       "kind": "category", "expandable": false, "apply_to": "lsp_settings", "settings_path": "Lua.diagnostics.disable", "desc": "Global element warning",             "default": false }
+  ]
+}
