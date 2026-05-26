@@ -19,17 +19,17 @@ describe("state.init_ft_state", function()
     local s = reload("diagnostic-picker.state")
     local p = make_provider()
     s.init_ft_state("cpp", p)
-    -- JSON defaults all true
-    assert.is_true(s.state["cpp"]["-Wall"])
-    assert.is_true(s.state["cpp"]["-Wshadow"])
+    -- JSON defaults all false for clangd
+    assert.is_false(s.state["cpp"]["-Wall"])
+    assert.is_false(s.state["cpp"]["-Wshadow"])
   end)
 
   it("initializes category items from JSON defaults", function()
     local s = reload("diagnostic-picker.state")
     local p = make_provider()
     s.init_ft_state("cpp", p)
-    assert.is_true(s.state["cpp"]["modernize-*"])
-    assert.is_true(s.state["cpp"]["bugprone-*"])
+    assert.is_false(s.state["cpp"]["modernize-*"])
+    assert.is_false(s.state["cpp"]["bugprone-*"])
   end)
 
   it("is a no-op when called a second time", function()
@@ -66,15 +66,15 @@ describe("state toggles", function()
     assert.is_false(s.state["cpp"]["modernize-use-auto"])
   end)
 
-  it("is_enabled returns true for nil (default)", function()
+  it("is_enabled returns false for nil (default)", function()
     local s = reload("diagnostic-picker.state")
     s.state["cpp"] = {}
-    assert.is_true(s.is_enabled("cpp", "anything"))
+    assert.is_false(s.is_enabled("cpp", "anything"))
   end)
 
-  it("is_enabled returns true when no ft state exists", function()
+  it("is_enabled returns false when no ft state exists", function()
     local s = reload("diagnostic-picker.state")
-    assert.is_true(s.is_enabled("noft", "anything"))
+    assert.is_false(s.is_enabled("noft", "anything"))
   end)
 
   it("toggle_severity flips severity", function()

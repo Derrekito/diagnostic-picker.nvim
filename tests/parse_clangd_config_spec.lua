@@ -150,9 +150,9 @@ describe("parse_clangd_config", function()
 
     vim.fn.filereadable = orig_readable
 
-    -- JSON defaults are all true for compile flags
+    -- JSON defaults are all false for clangd compile flags
     local s = state_mod.state["cpp"]
-    assert.is_true(s["-Wall"],    "JSON default for -Wall is true")
-    assert.is_true(s["-Wshadow"], "JSON default for -Wshadow is true")
+    assert.is_false(s["-Wall"],    "JSON default for -Wall is false")
+    assert.is_false(s["-Wshadow"], "JSON default for -Wshadow is false")
   end)
 end)

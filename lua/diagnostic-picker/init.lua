@@ -6,22 +6,6 @@ local config = require("diagnostic-picker.config")
 local provider_registry = require("diagnostic-picker.provider")
 local state = require("diagnostic-picker.state")
 
--- Setup function (called by user in config)
-M.setup = function(opts)
-  config.setup(opts or {})
-  provider_registry.load_providers()
-  -- Apply severity defaults immediately so diagnostics reflect config on startup
-  state.init_severities()
-  require("diagnostic-picker").apply_config()
-end
-
--- Show the diagnostic picker
-M.show = function(opts)
-  -- Lazy-load UI module
-  local ui = require("diagnostic-picker.ui")
-  ui.show(opts)
-end
-
 -- Apply severity filter to vim diagnostics (session-only, no file I/O).
 -- bufnr: the buffer to scope the config to (nil = global/all buffers)
 local function apply_severities(bufnr)
@@ -58,6 +42,18 @@ local function apply_severities(bufnr)
   end
 end
 
+M.setup = function(opts)
+  config.setup(opts or {})
+  provider_registry.load_providers()
+  state.init_severities()
+  apply_severities()
+end
+
+M.show = function(opts)
+  local ui = require("diagnostic-picker.ui")
+  ui.show(opts)
+end
+
 -- Enter in picker: apply severity filter for this session only.
 -- Language-specific settings (compile flags, clang-tidy checks) are kept
 -- in memory and reflected in the picker but NOT written to disk.
@@ -65,7 +61,18 @@ end
 M.apply_config = function(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   apply_severities(bufnr)
-  print("Diagnostic filter applied (session only — use save_config() to persist)")
+
+  local ft = vim.bo[bufnr].filetype
+  local provider = provider_registry.get_for_filetype(ft)
+
+  if provider and provider.apply_session then
+    local result = provider:apply_session(state.state, bufnr)
+    if result and result.message then
+      print(result.message)
+    end
+  else
+    print("Diagnostic filter applied (session only)")
+  end
 end
 
 -- Write provider config to disk and restart the LSP.

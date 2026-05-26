@@ -120,11 +120,11 @@ end
 -- Get enabled state for a category/check (key is bufnr in production, ft string in tests)
 M.is_enabled = function(key, name)
   if not M.state[key] then
-    return true -- Default enabled
+    return false
   end
   local enabled = M.state[key][name]
   if enabled == nil then
-    return true -- Default enabled
+    return false
   end
   return enabled
 end

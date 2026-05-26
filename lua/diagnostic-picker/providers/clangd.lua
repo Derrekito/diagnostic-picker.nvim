@@ -126,20 +126,68 @@ end
 
 local _available_categories = nil
 
+local _available_checks = nil
+
 local function available_categories()
   if _available_categories then return _available_categories end
   _available_categories = {}
+  _available_checks = {}
   local h = io.popen("clang-tidy --list-checks -checks='*' 2>/dev/null")
   if not h then return _available_categories end
   for line in h:lines() do
     local check = line:match("^%s+(%S+)")
     if check then
+      _available_checks[check] = true
       local prefix = check:match("^([^-]+-)")
       if prefix then _available_categories[prefix .. "*"] = true end
     end
   end
   h:close()
   return _available_categories
+end
+
+local function is_available(name)
+  available_categories()
+  if name:match("%*$") then
+    return _available_categories[name] or false
+  end
+  return _available_checks[name] or false
+end
+
+-- ── All-checks cache (for search/filter mode) ──────────────────────────────
+
+local _all_individual_checks = nil
+
+function ClangdProvider:get_all_checks()
+  if _all_individual_checks then return _all_individual_checks end
+  available_categories()
+  if not _available_checks then return {} end
+
+  _all_individual_checks = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "category" and section.expandable then
+      for _, item in ipairs(section.items or {}) do
+        local prefix = item.name:match("^(.-)%*$")
+        if prefix then
+          local checks = {}
+          for check in pairs(_available_checks) do
+            if check:sub(1, #prefix) == prefix then
+              table.insert(checks, check)
+            end
+          end
+          table.sort(checks)
+          for _, check in ipairs(checks) do
+            table.insert(_all_individual_checks, {
+              name = check,
+              parent = item.name,
+              config_source = "",
+            })
+          end
+        end
+      end
+    end
+  end
+  return _all_individual_checks
 end
 
 -- ── Provider interface ───────────────────────────────────────────────────────
@@ -233,8 +281,8 @@ function ClangdProvider:get_categories(bufnr)
     if section.kind == "category" then
       for _, item in ipairs(section.items or {}) do
         local cat = vim.tbl_extend("keep", {}, item)
-        cat.expandable   = section.expandable
-        cat.not_installed = not avail[item.name]
+        cat.expandable   = section.expandable and item.name:match("%*$") ~= nil
+        cat.not_installed = not is_available(item.name)
 
         if not cat.not_installed then
           local src = ""
@@ -349,7 +397,7 @@ function ClangdProvider:expand_category(category_name)
   local checks     = {}
   local configured = get_configured_checks()
   local icons      = require("diagnostic-picker.config").get().icons
-  local pattern    = "^%s*(" .. category_name:gsub("%*", "[^%s]+") .. ")%s*$"
+  local pattern    = "^%s*(" .. category_name:gsub("%*", "[^%%s]+") .. ")%s*$"
 
   for line in handle:lines() do
     local check = line:match(pattern)
@@ -367,16 +415,14 @@ function ClangdProvider:expand_category(category_name)
   return checks
 end
 
--- apply_config: write .clangd file from current state.
--- current_state is the full state table (keyed by bufnr or ft string).
--- bufnr: the buffer that was active when the picker opened.
-function ClangdProvider:apply_config(current_state, bufnr)
+-- Compute the managed state: what the picker wants to write.
+-- Returns a table with project_root, cpp_std, compile_flags, managed_flag_set,
+-- add_checks, remove_checks, remove_count.
+function ClangdProvider:_compute_state(current_state, bufnr)
   local project_root = get_project_root(bufnr)
   local ft           = bufnr and vim.bo[bufnr].filetype or vim.bo.filetype
-  local clangd_path  = project_root .. "/.clangd"
   local buf_state    = current_state[bufnr] or current_state[ft] or {}
 
-  -- Resolve C++ standard (radio)
   local cpp_std = buf_state["__cpp_standard"]
   if not cpp_std then
     for _, section in ipairs(self.sections) do
@@ -387,11 +433,12 @@ function ClangdProvider:apply_config(current_state, bufnr)
     end
   end
 
-  -- Collect enabled compile flags (toggles with apply_to=compile_flags)
   local compile_flags = { ("-std=" .. cpp_std) }
+  local managed_flag_set = {}
   for _, section in ipairs(self.sections) do
     if section.kind == "toggle" and section.apply_to == "compile_flags" then
       for _, item in ipairs(section.items or {}) do
+        managed_flag_set[item.name] = true
         local enabled = buf_state[item.name]
         if enabled == nil then enabled = item.default ~= false end
         if enabled then table.insert(compile_flags, item.name) end
@@ -399,7 +446,6 @@ function ClangdProvider:apply_config(current_state, bufnr)
     end
   end
 
-  -- Collect disabled clang-tidy checks
   local remove_checks = {}
   for name, enabled in pairs(buf_state) do
     if not enabled and type(name) == "string" and not name:match("^__") and not name:match("^%-") then
@@ -408,7 +454,6 @@ function ClangdProvider:apply_config(current_state, bufnr)
   end
   table.sort(remove_checks)
 
-  -- Preserve enabled checks from global config
   local add_checks = {}
   for check, info in pairs(get_configured_checks(project_root)) do
     if info.enabled and info.source:match("config.yaml") then
@@ -416,57 +461,196 @@ function ClangdProvider:apply_config(current_state, bufnr)
     end
   end
 
-  -- Build the set of -W flags we're managing so we can remove them first,
-  -- preventing duplication with whatever the global config already adds.
-  local managed_w_flags = {}
-  for _, section in ipairs(self.sections) do
-    if section.kind == "toggle" and section.apply_to == "compile_flags" then
-      for _, item in ipairs(section.items or {}) do
-        table.insert(managed_w_flags, item.name)
+  return {
+    project_root = project_root,
+    cpp_std = cpp_std,
+    compile_flags = compile_flags,
+    managed_flag_set = managed_flag_set,
+    add_checks = add_checks,
+    remove_checks = remove_checks,
+    remove_count = #remove_checks,
+  }
+end
+
+-- Patch an existing .clangd file: only modify managed sections, preserve
+-- everything else. If no file exists, create one with only managed content.
+function ClangdProvider:build_clangd_lines(current_state, bufnr)
+  local st = self:_compute_state(current_state, bufnr)
+  local clangd_path = st.project_root .. "/.clangd"
+
+  local existing_lines = {}
+  local f = io.open(clangd_path, "r")
+  if f then
+    for line in f:lines() do
+      table.insert(existing_lines, line)
+    end
+    f:close()
+  end
+
+  -- If no existing file, generate a minimal one with only managed sections
+  if #existing_lines == 0 then
+    local lines = { "Diagnostics:", "  ClangTidy:" }
+    if #st.add_checks > 0 then
+      table.insert(lines, "    Add:")
+      for _, c in ipairs(st.add_checks) do table.insert(lines, "      - " .. c) end
+    end
+    if #st.remove_checks > 0 then
+      table.insert(lines, "    Remove:")
+      for _, c in ipairs(st.remove_checks) do table.insert(lines, "      - " .. c) end
+    else
+      table.insert(lines, "    Remove: []")
+    end
+    return { lines = lines, project_root = st.project_root, cpp_std = st.cpp_std, remove_count = st.remove_count }
+  end
+
+  -- Parse existing file, replacing only managed sections in place.
+  local out = {}
+  local i = 1
+  local wrote_diagnostics = false
+  local wrote_compile_add = false
+
+  while i <= #existing_lines do
+    local line = existing_lines[i]
+
+    -- Detect CompileFlags.Add section — inject managed flags alongside user flags
+    if line:match("^%s+Add:") and i > 1 and existing_lines[i-1]:match("^CompileFlags:") then
+      -- This is CompileFlags > Add — skip to end of block list, rebuild it
+      table.insert(out, line)
+      i = i + 1
+      -- Collect user flags (non-managed), skip managed ones
+      local user_flags = {}
+      while i <= #existing_lines and existing_lines[i]:match("^%s+%-%s") do
+        local flag = existing_lines[i]:match('^%s+%-%s*"?(.-)"?%s*$')
+        if flag and not st.managed_flag_set[flag] and not flag:match("^%-std=") then
+          table.insert(user_flags, flag)
+        end
+        i = i + 1
       end
+      -- Write managed flags then user flags
+      for _, flag in ipairs(st.compile_flags) do
+        table.insert(out, '    - "' .. flag .. '"')
+      end
+      for _, flag in ipairs(user_flags) do
+        table.insert(out, '    - "' .. flag .. '"')
+      end
+      wrote_compile_add = true
+
+    -- Detect CompileFlags.Remove section — inject managed flag removals alongside user removals
+    elseif line:match("^%s+Remove:") and i > 1 and existing_lines[i-1]:match("^CompileFlags:")
+        or (line:match("^%s+Remove:") and not wrote_diagnostics and wrote_compile_add) then
+      table.insert(out, line)
+      i = i + 1
+      local user_removals = {}
+      while i <= #existing_lines and existing_lines[i]:match("^%s+%-%s") do
+        local flag = existing_lines[i]:match('^%s+%-%s*"?(.-)"?%s*$')
+        if flag and not st.managed_flag_set[flag] and not flag:match("^%-std=") then
+          table.insert(user_removals, flag)
+        end
+        i = i + 1
+      end
+      table.insert(out, '    - "-std=*"')
+      for flag in pairs(st.managed_flag_set) do
+        table.insert(out, '    - "' .. flag .. '"')
+      end
+      for _, flag in ipairs(user_removals) do
+        table.insert(out, '    - "' .. flag .. '"')
+      end
+
+    -- Detect Diagnostics.ClangTidy section — replace Add/Remove
+    elseif line:match("^%s+ClangTidy:") and wrote_diagnostics == false then
+      -- Check if parent is Diagnostics
+      local j = i - 1
+      while j >= 1 and existing_lines[j]:match("^%s*$") do j = j - 1 end
+      if j >= 1 and existing_lines[j]:match("^Diagnostics:") then
+        wrote_diagnostics = true
+        table.insert(out, line)
+        i = i + 1
+        -- Skip existing Add/Remove subsections under ClangTidy
+        while i <= #existing_lines do
+          local sub = existing_lines[i]
+          if sub:match("^%s+Add:") or sub:match("^%s+Remove:") then
+            -- Skip the key line
+            i = i + 1
+            -- Skip block list items or flow sequence
+            if existing_lines[i-1]:match("%[") then
+              -- Flow sequence — skip until ]
+              if not existing_lines[i-1]:match("%]") then
+                while i <= #existing_lines and not existing_lines[i]:match("%]") do
+                  i = i + 1
+                end
+                i = i + 1
+              end
+            else
+              while i <= #existing_lines and existing_lines[i]:match("^%s+%-") do
+                i = i + 1
+              end
+            end
+          else
+            break
+          end
+        end
+        -- Write our Add/Remove
+        if #st.add_checks > 0 then
+          table.insert(out, "    Add:")
+          for _, c in ipairs(st.add_checks) do table.insert(out, "      - " .. c) end
+        end
+        if #st.remove_checks > 0 then
+          table.insert(out, "    Remove:")
+          for _, c in ipairs(st.remove_checks) do table.insert(out, "      - " .. c) end
+        else
+          table.insert(out, "    Remove: []")
+        end
+      else
+        table.insert(out, line)
+        i = i + 1
+      end
+
+    -- Detect Diagnostics: header (just track it)
+    elseif line:match("^Diagnostics:") then
+      wrote_diagnostics = false  -- reset; will be set true when ClangTidy: found
+      table.insert(out, line)
+      i = i + 1
+
+    else
+      table.insert(out, line)
+      i = i + 1
     end
   end
 
-  -- Write .clangd
-  -- CompileFlags.Remove strips flags inherited from the global config.yaml before
-  -- we add ours, preventing duplicates like "-std=c++17 ... -std=c++17" in the
-  -- compile command. clangd merges local and global configs additively, so without
-  -- Remove the global flags survive alongside our local ones.
-  local lines = {
-    "# Local clangd overrides — generated by diagnostic-picker.nvim",
-    "",
-    "CompileFlags:",
-    "  Remove:",
-    '    - "-std=*"',  -- strip any global -std= so our selection is the only one
-  }
-  for _, flag in ipairs(managed_w_flags) do
-    -- strip all -W flags we manage so only the user's current selection survives
-    table.insert(lines, '    - "' .. flag .. '"')
+  -- If file had no Diagnostics.ClangTidy section, append one
+  if not wrote_diagnostics and (#st.add_checks > 0 or #st.remove_checks > 0) then
+    table.insert(out, "")
+    table.insert(out, "Diagnostics:")
+    table.insert(out, "  ClangTidy:")
+    if #st.add_checks > 0 then
+      table.insert(out, "    Add:")
+      for _, c in ipairs(st.add_checks) do table.insert(out, "      - " .. c) end
+    end
+    if #st.remove_checks > 0 then
+      table.insert(out, "    Remove:")
+      for _, c in ipairs(st.remove_checks) do table.insert(out, "      - " .. c) end
+    else
+      table.insert(out, "    Remove: []")
+    end
   end
-  table.insert(lines, "  Add:")
-  for _, flag in ipairs(compile_flags) do
-    table.insert(lines, '    - "' .. flag .. '"')
-  end
-  table.insert(lines, "")
-  table.insert(lines, "Diagnostics:")
-  table.insert(lines, "  ClangTidy:")
-  if #add_checks > 0 then
-    table.insert(lines, "    Add:")
-    for _, c in ipairs(add_checks) do table.insert(lines, "      - " .. c) end
-  end
-  if #remove_checks > 0 then
-    table.insert(lines, "    Remove:")
-    for _, c in ipairs(remove_checks) do table.insert(lines, "      - " .. c) end
-  else
-    table.insert(lines, "    Remove: []")
-  end
+
+  return { lines = out, project_root = st.project_root, cpp_std = st.cpp_std, remove_count = st.remove_count }
+end
+
+-- apply_config: write permanent .clangd file from current state (gs key).
+function ClangdProvider:apply_config(current_state, bufnr)
+  local result = self:build_clangd_lines(current_state, bufnr)
+  local clangd_path = result.project_root .. "/.clangd"
+
+  local tempfile = require("diagnostic-picker.clangd_tempfile")
+  tempfile.cancel_cleanup(result.project_root)
 
   local existing = vim.fn.filereadable(clangd_path) == 1
   local f = io.open(clangd_path, "w")
   if not f then
     return { success = false, message = "Could not write " .. clangd_path }
   end
-  for _, line in ipairs(lines) do f:write(line .. "\n") end
+  for _, line in ipairs(result.lines) do f:write(line .. "\n") end
   f:close()
 
   self:restart_lsp(bufnr)
@@ -474,8 +658,29 @@ function ClangdProvider:apply_config(current_state, bufnr)
   return {
     success = true,
     message = (existing and "Updated" or "Created") .. " " .. clangd_path
-      .. "\nC++ standard: " .. cpp_std
-      .. "\nDisabled checks: " .. #remove_checks,
+      .. "\nC++ standard: " .. result.cpp_std
+      .. "\nDisabled checks: " .. result.remove_count,
+  }
+end
+
+-- apply_session: write a temporary .clangd file (Enter key).
+-- Backs up any existing .clangd; restores on VimLeavePre.
+function ClangdProvider:apply_session(current_state, bufnr)
+  local result = self:build_clangd_lines(current_state, bufnr)
+
+  local tempfile = require("diagnostic-picker.clangd_tempfile")
+  local ok = tempfile.write_temp(result.project_root, result.lines)
+  if not ok then
+    return { success = false, message = "Could not write temp .clangd" }
+  end
+
+  self:restart_lsp(bufnr)
+
+  return {
+    success = true,
+    message = "Session config applied (temp .clangd)"
+      .. "\nC++ standard: " .. result.cpp_std
+      .. "\nDisabled checks: " .. result.remove_count,
   }
 end
 

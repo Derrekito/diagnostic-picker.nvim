@@ -226,17 +226,18 @@ function Provider:restart_lsp(bufnr)
   if bufnr then opts.bufnr = bufnr end
   local clients = vim.lsp.get_clients(opts)
   for _, client in ipairs(clients) do
-    -- false = graceful shutdown (sends LSP shutdown request before exit).
-    -- true would send SIGKILL immediately, causing clangd to log exit code 1.
-    vim.lsp.stop_client(client.id, false)
+    client:stop()
   end
   -- Delay restart to give the client time to finish shutting down.
   -- LspStart is provided by nvim-lspconfig; fall back to :edit which
   -- triggers FileType autocmds and causes lspconfig to re-attach.
+  local target_buf = bufnr or vim.api.nvim_get_current_buf()
   vim.defer_fn(function()
+    if not vim.api.nvim_buf_is_valid(target_buf) then return end
     if vim.fn.exists(":LspStart") == 2 then
       vim.cmd("LspStart " .. self.lsp_name)
     else
+      vim.api.nvim_set_current_buf(target_buf)
       vim.cmd("edit")
     end
   end, 500)
