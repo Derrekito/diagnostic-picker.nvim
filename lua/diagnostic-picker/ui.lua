@@ -32,6 +32,27 @@ local function debug_print(...)
   end
 end
 
+-- Aggregate a category's state from its child rules.
+-- Returns "all" (every child enabled), "none" (every child disabled), or
+-- "mixed". A category has no state of its own — it's derived from children, so
+-- the checkbox always reflects what's actually enabled rather than a separate
+-- (and easily stale) per-category flag.
+-- Returns nil if the provider can't enumerate children for this category.
+local function category_child_state(entry, provider)
+  if not (provider and provider.expand_category) then return nil end
+  local checks = provider:expand_category(entry.name)
+  if not checks or #checks == 0 then return nil end
+  local enabled_count = 0
+  for _, check in ipairs(checks) do
+    if state.is_enabled(entry.bufnr, check.name or check) then
+      enabled_count = enabled_count + 1
+    end
+  end
+  if enabled_count == 0 then return "none" end
+  if enabled_count == #checks then return "all" end
+  return "mixed"
+end
+
 -- Entry maker function
 M.make_entry = function(entry, provider)
   if entry.type == "header" then
@@ -73,15 +94,25 @@ M.make_entry = function(entry, provider)
         hl_group = "DiagnosticError",
       }
     end
-    -- Derive enabled state from children when category is expandable.
-    -- A category is "on" only if every child item is enabled.
-    local enabled = state.is_enabled(entry.bufnr, entry.name)
+    -- Derive the checkbox from children: [✓] all on, [ ] all off, [~] mixed.
+    -- Falls back to the category's own flag only when children can't be
+    -- enumerated (e.g. a flat category section with no expand_category).
+    local child_state = category_child_state(entry, provider)
     local expanded = state.is_expanded(entry.name)
     -- Show [-]/[+] only for expandable categories; auto_expand ones start open
     local auto_open = entry.auto_expand and state.state.expanded[entry.name] == nil
     local is_open = expanded or auto_open
     local expand_icon = entry.expandable and (is_open and "[-] " or "[+] ") or ""
-    local prefix = enabled and "[✓] " or "[ ] "
+    local prefix
+    if child_state == "all" then
+      prefix = "[✓] "
+    elseif child_state == "none" then
+      prefix = "[ ] "
+    elseif child_state == "mixed" then
+      prefix = "[~] "
+    else
+      prefix = state.is_enabled(entry.bufnr, entry.name) and "[✓] " or "[ ] "
+    end
     local desc = entry.desc and (" - " .. entry.desc) or ""
     local config_source = entry.config_source or ""
     return {
@@ -295,6 +326,11 @@ M.show = function(opts)
   local items = M.build_items(original_ft, provider, false, original_bufnr)
 
   local filter_active = false
+  -- Tracks whether the user changed any toggle/check/option this session.
+  -- On close we auto-apply (write config to disk) if dirty, so toggling "just
+  -- works" without requiring a separate gs/Enter keystroke. Explicit gs/Enter
+  -- still work and clear this so close doesn't double-apply.
+  local dirty = false
 
   local function make_finder(force_expand)
     local built = M.build_items(original_ft, provider, force_expand, original_bufnr)
@@ -307,7 +343,7 @@ M.show = function(opts)
   end
 
   pickers.new(opts, {
-    prompt_title = "Diagnostic Settings (Space=toggle, Tab=expand, Enter=apply session, gs=save to disk)",
+    prompt_title = "Diagnostic Settings (Space=toggle, Tab=expand, Enter=session, gs/close=save to disk)",
     finder = make_finder(false),
     sorter = conf.generic_sorter(opts),
     selection_strategy = "row",
@@ -327,14 +363,35 @@ M.show = function(opts)
         end,
       })
 
+      -- Auto-apply on close: if the user toggled anything and dismissed the
+      -- picker without an explicit gs/Enter (e.g. q/Esc), write the config to
+      -- disk so toggles are never silently discarded. Fires once when the
+      -- telescope prompt buffer is wiped on close.
+      vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = prompt_bufnr,
+        once = true,
+        callback = function()
+          if dirty then
+            dirty = false
+            -- Defer so the close completes and focus returns to the file buffer
+            -- before we write + relint.
+            vim.schedule(function()
+              require("diagnostic-picker").save_config(original_bufnr)
+            end)
+          end
+        end,
+      })
+
       -- Enter: apply session-only (no file write)
       actions.select_default:replace(function()
+        dirty = false  -- explicit apply; don't let the close hook re-apply
         actions.close(prompt_bufnr)
         require("diagnostic-picker").apply_config(original_bufnr)
       end)
 
       -- gs: save to disk + restart LSP
       map("n", "gs", function()
+        dirty = false  -- explicit apply; don't let the close hook re-apply
         actions.close(prompt_bufnr)
         require("diagnostic-picker").save_config(original_bufnr)
       end)
@@ -358,20 +415,26 @@ M.show = function(opts)
             provider:set_language_option(entry.provider_data, entry.name, original_bufnr)
           end
         elseif entry.type == "category" then
-          state.toggle_category(entry.bufnr, entry.name)
-          local new_value = state.is_enabled(entry.bufnr, entry.name)
+          -- Cascade to children. Direction is derived from current child state:
+          -- if any child is on (all/mixed) turn the whole group off, otherwise
+          -- turn it on. The category has no independent flag.
           if provider and provider.expand_category then
             local checks = provider:expand_category(entry.name)
+            local child_state = category_child_state(entry, provider)
+            local new_value = (child_state == "none")
+            if not state.state[entry.bufnr] then state.state[entry.bufnr] = {} end
             for _, check in ipairs(checks) do
-              local check_name = check.name or check
-              if not state.state[entry.bufnr] then state.state[entry.bufnr] = {} end
-              state.state[entry.bufnr][check_name] = new_value
+              state.state[entry.bufnr][check.name or check] = new_value
             end
+          else
+            -- Flat category with no children: fall back to its own flag.
+            state.toggle_category(entry.bufnr, entry.name)
           end
         elseif entry.type == "check" then
           state.toggle_check(entry.bufnr, entry.name)
         end
 
+        dirty = true
         refresh_picker(current_picker, original_ft, provider, nil, filter_active, original_bufnr)
       end
 

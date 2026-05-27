@@ -13,12 +13,13 @@ A language-agnostic Neovim plugin for managing LSP diagnostic settings via a Tel
 
 ## Supported Languages
 
-| Language | Provider | Config written |
-|----------|----------|----------------|
-| C/C++    | clangd   | `.clangd` (CompileFlags + ClangTidy) |
-| Python   | pylsp    | LSP `workspace/didChangeConfiguration` |
-| Lua      | lua-ls   | LSP `workspace/didChangeConfiguration` |
-| Bash/Zsh | bash-ls  | LSP `workspace/didChangeConfiguration` |
+| Language       | Provider | Config written |
+|----------------|----------|----------------|
+| C/C++          | clangd   | `.clangd` (CompileFlags + ClangTidy) |
+| Python         | pylsp    | LSP `workspace/didChangeConfiguration` |
+| Lua            | lua-ls   | LSP `workspace/didChangeConfiguration` |
+| Bash/Zsh       | bash-ls  | LSP `workspace/didChangeConfiguration` |
+| MATLAB/Octave  | mh_lint  | `miss_hit.cfg` (MISS_HIT style/lint/metrics) |
 
 ## Installation
 
@@ -172,6 +173,7 @@ return MyProvider
 | `compile_flags` | Written to `.clangd` CompileFlags (clangd only) |
 | `clang_tidy`    | Written to `.clangd` Diagnostics.ClangTidy (clangd only) |
 | `lsp_settings`  | Pushed via `workspace/didChangeConfiguration` |
+| `cfg_file`      | Written to a tool-specific config file (e.g. `miss_hit.cfg`) |
 
 ## Architecture
 
@@ -181,7 +183,8 @@ diagnostic-picker.nvim/
 │   ├── clangd.json
 │   ├── pylsp.json
 │   ├── lua-ls.json
-│   └── bash-ls.json
+│   ├── bash-ls.json
+│   └── mh-lint.json
 └── lua/diagnostic-picker/
     ├── init.lua                  # Entry point: setup(), show(), apply_config()
     ├── config.lua                # Plugin options
@@ -195,6 +198,7 @@ diagnostic-picker.nvim/
         ├── bash_ls.lua           # BashLsProvider subclass
         ├── clangd.lua            # ClangdProvider subclass
         ├── lua_ls.lua            # LuaLsProvider subclass
+        ├── mh_lint.lua           # MhLintProvider subclass
         └── pylsp.lua             # PylspProvider subclass
 ```
 
