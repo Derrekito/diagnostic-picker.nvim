@@ -1,0 +1,15 @@
+CompileFlags:
+  Add:
+    - "-std=c++17"
+    - "-Wall"
+    - "-Wextra"
+    - "-Wpedantic"
+
+Diagnostics:
+  ClangTidy:
+    Add: [
+      modernize-*,
+      readability-*,
+      bugprone-*
+    ]
+    Remove: []
