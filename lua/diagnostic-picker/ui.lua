@@ -114,7 +114,7 @@ M.build_items = function(ft, provider, force_expand)
   if provider then
     -- Add language options grouped by their group field
     if provider.get_language_options then
-      local lang_opts = provider.get_language_options()
+      local lang_opts = provider:get_language_options(ft)
       if lang_opts and #lang_opts > 0 then
         local current_group = nil
         for _, opt in ipairs(lang_opts) do
@@ -135,7 +135,7 @@ M.build_items = function(ft, provider, force_expand)
     -- Add categories header with config info
     local header_text = "=== " .. ft:upper() .. " Linter Categories"
     if provider.get_config_info then
-      local info = provider.get_config_info()
+      local info = provider:get_config_info()
       if info then
         header_text = header_text .. " (" .. info .. ")"
       end
@@ -144,7 +144,7 @@ M.build_items = function(ft, provider, force_expand)
     table.insert(items, { type = "header", display = header_text })
 
     -- Get categories from provider
-    local categories = provider.get_categories()
+    local categories = provider:get_categories()
     debug_print("categories for", ft, ":", categories and #categories or "nil")
 
     if categories and #categories > 0 then
@@ -161,7 +161,7 @@ M.build_items = function(ft, provider, force_expand)
 
         -- If expanded (or force_expand for filtering), add individual checks
         if (force_expand or state.is_expanded(cat.name)) and provider.expand_category then
-          local checks = provider.expand_category(cat.name)
+          local checks = provider:expand_category(cat.name)
           for _, check in ipairs(checks) do
             table.insert(items, {
               type = "check",
@@ -231,10 +231,15 @@ M.show = function(opts)
   local original_ft = vim.bo.filetype
   local provider = provider_registry.get_for_filetype(original_ft)
 
-  -- Initialize state for this filetype
+  -- Initialize state for this filetype on first open.
+  -- sync_state_from_files reads existing config files and populates state to
+  -- reflect reality; if no config file exists the JSON defaults are kept.
   if provider then
-    local categories = provider.get_categories()
-    state.init_category_state(original_ft, categories)
+    local is_first_open = state.state[original_ft] == nil
+    state.init_ft_state(original_ft, provider)
+    if is_first_open and provider.sync_state_from_files then
+      provider:sync_state_from_files(state.state[original_ft])
+    end
   end
 
   local items = M.build_items(original_ft, provider)
@@ -294,13 +299,13 @@ M.show = function(opts)
           state.toggle_severity(entry.name)
         elseif entry.type == "language_option" then
           if provider and provider.set_language_option then
-            provider.set_language_option(entry.provider_data, entry.name)
+            provider:set_language_option(entry.provider_data, entry.name, original_ft)
           end
         elseif entry.type == "category" then
           state.toggle_category(entry.ft, entry.name)
           local new_value = state.is_enabled(entry.ft, entry.name)
           if provider and provider.expand_category then
-            local checks = provider.expand_category(entry.name)
+            local checks = provider:expand_category(entry.name)
             for _, check in ipairs(checks) do
               local check_name = check.name or check
               if not state.state[entry.ft] then state.state[entry.ft] = {} end

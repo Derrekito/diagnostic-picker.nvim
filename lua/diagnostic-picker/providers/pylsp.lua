@@ -1,75 +1,47 @@
--- Pylsp provider for Python
+-- Pylsp provider (Python)
+-- Subclasses Provider; applies config via LSP workspace/didChangeConfiguration.
 
-local M = {}
+local Provider = require("diagnostic-picker.provider_base")
 
--- Provider metadata
-M.name = "pylsp"
-M.filetypes = { "python" }
+local PylspProvider = setmetatable({}, { __index = Provider })
+PylspProvider.__index = PylspProvider
 
--- Check if pylsp is installed
-M.is_installed = function()
+function PylspProvider.new(config)
+  local self = Provider.new(config)
+  return setmetatable(self, PylspProvider)
+end
+
+function PylspProvider:get_categories()
+  local categories = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "category" then
+      for _, item in ipairs(section.items or {}) do
+        table.insert(categories, vim.tbl_extend("keep", {}, item))
+      end
+    end
+  end
+  return categories
+end
+
+function PylspProvider:apply_config(current_state)
+  local ft_state = current_state["python"] or {}
+  local plugins  = {}
+
+  for _, section in ipairs(self.sections) do
+    if section.apply_to == "lsp_settings" and section.kind == "toggle" then
+      for _, item in ipairs(section.items or {}) do
+        local enabled = ft_state[item.name]
+        if enabled == nil then enabled = item.default ~= false end
+        plugins[item.name] = { enabled = enabled }
+      end
+    end
+  end
+
+  return self:apply_lsp_settings({ pylsp = { plugins = plugins } })
+end
+
+function PylspProvider:is_installed()
   return vim.fn.executable("pylsp") == 1
 end
 
--- Get categories
-M.get_categories = function()
-  return {
-    { name = "pycodestyle", desc = "PEP 8 style", plugin = "pycodestyle" },
-    { name = "pyflakes", desc = "Logic errors", plugin = "pyflakes" },
-    { name = "mccabe", desc = "Complexity", plugin = "mccabe" },
-    { name = "pylint", desc = "Pylint checks", plugin = "pylint" },
-    { name = "rope", desc = "Refactoring", plugin = "rope" },
-  }
-end
-
--- Apply configuration
-M.apply_config = function(state)
-  if not state.python then
-    return {
-      success = true,
-      message = "No Python configuration changes"
-    }
-  end
-
-  -- Build pylsp plugin configuration
-  local plugins_config = {}
-  local categories = M.get_categories()
-
-  for _, cat in ipairs(categories) do
-    if cat.plugin then
-      plugins_config[cat.plugin] = {
-        enabled = state.python[cat.name] or false
-      }
-    end
-  end
-
-  -- Update LSP client settings
-  local clients = vim.lsp.get_clients({ bufnr = 0, name = "pylsp" })
-  if #clients > 0 then
-    for _, client in ipairs(clients) do
-      client.config.settings = vim.tbl_deep_extend("force", client.config.settings or {}, {
-        pylsp = {
-          plugins = plugins_config
-        }
-      })
-      client.notify("workspace/didChangeConfiguration", { settings = client.config.settings })
-    end
-
-    return {
-      success = true,
-      message = "Updated pylsp config - diagnostics will refresh"
-    }
-  else
-    return {
-      success = true,
-      message = "pylsp not running - settings will apply on next file open"
-    }
-  end
-end
-
--- Restart LSP (pylsp doesn't need restart, uses live config updates)
-M.restart_lsp = function()
-  -- Pylsp uses workspace/didChangeConfiguration, no restart needed
-end
-
-return M
+return PylspProvider

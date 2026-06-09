@@ -1,0 +1,32 @@
+{
+  "provider": "lua-ls",
+  "lsp_name": "lua_ls",
+  "filetypes": ["lua"],
+  "sections": [
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "kind": "toggle",
+      "apply_to": "lsp_settings",
+      "settings_path": "Lua.diagnostics",
+      "items": [
+        { "name": "enable",          "desc": "Enable diagnostics",        "default": true },
+        { "name": "globals",         "desc": "Global variable warnings",  "default": true },
+        { "name": "unusedLocalExclude", "desc": "Unused local warnings", "default": true }
+      ]
+    },
+    {
+      "id": "diagnostics_severity",
+      "title": "Diagnostic Severity",
+      "kind": "radio",
+      "apply_to": "lsp_settings",
+      "settings_path": "Lua.diagnostics.severity",
+      "items": [
+        { "name": "Error",   "desc": "Errors only" },
+        { "name": "Warning", "desc": "Warnings and above", "default": true },
+        { "name": "Information", "desc": "Info and above" },
+        { "name": "Hint",    "desc": "All hints" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "provider": "pylsp",
+  "lsp_name": "pylsp",
+  "filetypes": ["python"],
+  "sections": [
+    {
+      "id": "plugins",
+      "title": "Pylsp Plugins",
+      "kind": "toggle",
+      "apply_to": "lsp_settings",
+      "settings_path": "pylsp.plugins",
+      "items": [
+        { "name": "pycodestyle", "desc": "PEP 8 style",      "default": true },
+        { "name": "pyflakes",    "desc": "Logic errors",     "default": true },
+        { "name": "mccabe",      "desc": "Complexity",       "default": true },
+        { "name": "pylint",      "desc": "Pylint checks",    "default": false },
+        { "name": "rope",        "desc": "Refactoring",      "default": false },
+        { "name": "autopep8",    "desc": "Auto formatting",  "default": false },
+        { "name": "yapf",        "desc": "YAPF formatting",  "default": false },
+        { "name": "pydocstyle",  "desc": "Docstring style",  "default": false }
+      ]
+    }
+  ]
+}

@@ -9,6 +9,7 @@ local state = require("diagnostic-picker.state")
 -- Setup function (called by user in config)
 M.setup = function(opts)
   config.setup(opts or {})
+  provider_registry.load_providers()
 end
 
 -- Show the diagnostic picker
@@ -56,7 +57,7 @@ M.apply_config = function()
   local provider = provider_registry.get_for_filetype(ft)
 
   if provider and provider.apply_config then
-    local result = provider.apply_config(state.state)
+    local result = provider:apply_config(state.state)
     if result and result.message then
       print(result.message)
     end

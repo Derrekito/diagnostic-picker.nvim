@@ -1,15 +1,9 @@
 # Development Guide
 
-## Quick Start
+## Setup
 
-### Setup
+Use lazy.nvim with a local path:
 
-1. **Symlink for development** (fastest iteration):
-```bash
-ln -s ~/Projects/diagnostic-picker.nvim ~/.local/share/nvim/site/pack/dev/start/diagnostic-picker.nvim
-```
-
-2. **Or use lazy.nvim local path**:
 ```lua
 {
   dir = "~/Projects/diagnostic-picker.nvim",
@@ -17,225 +11,176 @@ ln -s ~/Projects/diagnostic-picker.nvim ~/.local/share/nvim/site/pack/dev/start/
   dependencies = { "nvim-telescope/telescope.nvim" },
   config = function()
     require("diagnostic-picker").setup({ debug = true })
-  end
+  end,
+  keys = {
+    { "<leader>dg", function() require("diagnostic-picker").show() end, desc = "Diagnostic settings" }
+  }
 }
 ```
 
-### Rapid Iteration Workflow
+## Iteration Workflow
 
-**Terminal 1**: Watch debug logs
+**Watch logs in a second terminal:**
 ```bash
 tail -f /tmp/diagnostic-picker-debug.log
 ```
 
-**Terminal 2**: Neovim
+**Reload without restarting nvim:**
 ```vim
-" Edit plugin code
-" Then reload:
-:lua package.loaded["diagnostic-picker"] = nil
-:lua package.loaded["diagnostic-picker.config"] = nil
-:lua package.loaded["diagnostic-picker.providers.clangd"] = nil
-:lua require("diagnostic-picker").show()
-
-" Or use this helper (add to your config):
-:lua require("diagnostic-picker.dev").reload()
+:lua for k in pairs(package.loaded) do if k:match("^diagnostic%-picker") then package.loaded[k] = nil end end
+:lua require("diagnostic-picker").setup({ debug = true })
 ```
 
-### Debug Helpers
-
-Add to your nvim config for development:
+Or add a keybind:
 ```lua
--- Pretty print
-P = function(v)
-  print(vim.inspect(v))
-  return v
-end
-
--- Quick reload
-R = function()
-  -- Unload all diagnostic-picker modules
+vim.keymap.set("n", "<leader>DR", function()
   for k in pairs(package.loaded) do
-    if k:match("^diagnostic%-picker") then
-      package.loaded[k] = nil
-    end
+    if k:match("^diagnostic%-picker") then package.loaded[k] = nil end
   end
-  return require("diagnostic-picker")
-end
+  require("diagnostic-picker").setup({ debug = true })
+  print("diagnostic-picker reloaded")
+end)
 ```
 
-## Provider Interface
+## Architecture
 
-Each language provider must implement:
+### Data flow
+
+```
+JSON config file
+    └─► provider.lua (registry)
+            └─► Provider subclass instantiated
+                    └─► ui.lua calls:
+                            provider:get_language_options()  → radio/toggle sections
+                            provider:get_categories()        → expandable category rows
+                            provider:expand_category(name)   → sub-check list
+                            provider:get_config_info()       → header string
+                    └─► on Enter: provider:apply_config(state)
+```
+
+### State shape
+
+`state.state` (from `state.lua`):
 
 ```lua
-local M = {}
+{
+  severities = { ERROR=true, WARN=true, INFO=true, HINT=true },
+  expanded   = { ["modernize-*"] = true },   -- which categories are open
+  cpp = {                                     -- per-filetype key
+    ["modernize-use-auto"]  = false,          -- individual check toggled off
+    ["__cpp_standard"]      = "c++20",        -- radio selection (prefix __)
+    ["-Wall"]               = true,           -- compiler flag toggle
+  },
+}
+```
 
--- Provider metadata
-M.name = "clangd"
-M.filetypes = { "c", "cpp" }
-M.lsp_name = "clangd"
+### JSON schema
 
--- Get available diagnostic categories
--- Returns: array of { name, desc, expandable }
-M.get_categories = function()
-  return {
-    { name = "modernize-*", desc = "Modern C++", expandable = true },
-    { name = "readability-*", desc = "Readability", expandable = true },
-    -- ...
-  }
-end
-
--- Get expanded checks for a category
--- Returns: array of check names
-M.get_checks = function(category)
-  return { "modernize-use-auto", "modernize-loop-convert", ... }
-end
-
--- Get current config state
--- Returns: table with enabled/disabled state
-M.get_config = function()
-  return {
-    checks = {
-      ["modernize-*"] = true,
-      ["readability-magic-numbers"] = false,
-    },
-    metadata = {
-      sources = { global = "~/.config/clangd/config.yaml", local = ".clangd" },
-      current_standard = "c++17",
+```json
+{
+  "provider":  "name",          // matches providers/<name>.lua (hyphens → underscores)
+  "lsp_name":  "lsp_client",   // vim.lsp.get_clients({ name = lsp_name })
+  "filetypes": ["ext"],
+  "sections": [
+    {
+      "id":         "section_id",
+      "title":      "Display Title",
+      "kind":       "radio | toggle | category",
+      "apply_to":   "compile_flags | clang_tidy | lsp_settings",
+      "expandable": true,           // category sections only
+      "settings_path": "a.b.c",    // lsp_settings: dot-path into settings table
+      "flag_prefix":   "-std=",    // radio compile_flags: prepended to item name
+      "items": [
+        { "name": "item-name", "desc": "Description", "default": true }
+      ]
     }
-  }
-end
-
--- Get language standards/versions (optional)
--- Returns: array of version strings
-M.get_standards = function()
-  return { "c++98", "c++11", "c++14", "c++17", "c++20", "c++23", "c++26" }
-end
-
--- Apply config changes
--- state: table with enabled/disabled checks and selected standard
-M.apply_config = function(state)
-  -- Write config file(s)
-  -- Restart LSP
-  return {
-    success = true,
-    message = "Config updated, LSP restarted"
-  }
-end
-
--- Check if this provider's tool is installed
-M.is_installed = function()
-  return vim.fn.executable("clangd") == 1
-end
-
-return M
+  ]
+}
 ```
 
-## Adding a New Language Provider
+### Provider class hierarchy
 
-1. **Create provider file**: `lua/diagnostic-picker/providers/mylang.lua`
+```
+Provider (provider_base.lua)
+├── ClangdProvider (providers/clangd.lua)   — writes .clangd, shells to clang-tidy
+├── PylspProvider  (providers/pylsp.lua)    — pushes lsp_settings
+└── <generic>      (provider.lua)           — pushes lsp_settings, no Lua file needed
+```
 
-2. **Implement the interface** (see above)
+**Methods subclasses can override:**
 
-3. **Register in init.lua**:
+| Method | Default behaviour |
+|--------|-------------------|
+| `apply_config(state)` | raises error — must override |
+| `expand_category(name)` | returns `{}` |
+| `get_categories()` | returns items from `kind=category` sections |
+| `get_language_options()` | returns items from radio/toggle sections |
+| `get_config_info()` | returns `nil` |
+| `is_installed()` | checks `vim.fn.executable(lsp_name)` |
+
+## Adding a New Language
+
+### No custom logic (lsp_settings only)
+
+1. Add `~/.config/nvim/diagnostic-picker/<name>.json`
+2. Set `"apply_to": "lsp_settings"` on sections
+3. Done — the generic provider handles the rest
+
+### Custom apply logic
+
+1. Add the JSON config (defines filetypes and UI structure)
+2. Add `~/.config/nvim/diagnostic-picker/<name>.lua`:
+
 ```lua
--- Providers are auto-discovered from providers/ directory
--- Or manually register:
-require("diagnostic-picker").register_provider(require("diagnostic-picker.providers.mylang"))
+local Provider = require("diagnostic-picker.provider_base")
+
+local MyProvider = setmetatable({}, { __index = Provider })
+MyProvider.__index = MyProvider
+
+function MyProvider.new(config)
+  return setmetatable(Provider.new(config), MyProvider)
+end
+
+function MyProvider:apply_config(current_state)
+  local ft_state = current_state[self.filetypes[1]] or {}
+  -- read ft_state["item-name"], ft_state["__section_id"], etc.
+  -- write config file / push LSP settings
+  self:restart_lsp()
+  return { success = true, message = "Done" }
+end
+
+-- Only needed for expandable category sections
+function MyProvider:expand_category(category_name)
+  return { { name = "check-name", config_source = "" } }
+end
+
+return MyProvider
 ```
 
-4. **Test**:
-```bash
-nvim test_file.mylang
-# Open diagnostic picker
-# Verify categories appear
-# Toggle some checks
-# Apply and verify config file changes
-```
+The registry matches `provider` field in JSON to `providers/<name>.lua`
+(hyphens in the JSON name become underscores in the filename).
 
-## Testing
+## Debugging
 
-### Manual Testing
-
-1. Create test files in `tests/fixtures/`:
-```
-tests/fixtures/
-├── test.cpp          # C++ test with violations
-├── test.py           # Python test
-└── test.lua          # Lua test
-```
-
-2. Open each file and verify:
-   - Categories load correctly
-   - Toggles update state
-   - Config files written correctly
-   - LSP restarts with new settings
-   - Diagnostics update appropriately
-
-### Debug Logging
-
-Enable debug mode in setup:
+Enable in setup:
 ```lua
 require("diagnostic-picker").setup({
-  debug = true,
-  debug_file = "/tmp/diagnostic-picker-debug.log"
+  debug      = true,
+  debug_file = "/tmp/diagnostic-picker-debug.log",
 })
 ```
 
-Debug functions available:
+Log from your provider:
 ```lua
-local debug = require("diagnostic-picker.debug")
-debug.print("message", variable)
-debug.dump(table)
+-- debug_print is local to ui.lua; in provider code use:
+local f = io.open("/tmp/diagnostic-picker-debug.log", "a")
+if f then f:write("my message\n"); f:close() end
 ```
-
-## Architecture Notes
-
-### Core (init.lua)
-- Language-agnostic picker logic
-- Telescope integration
-- State management
-- Provider registry and dispatch
-
-### Config (config.lua)
-- Plugin configuration
-- Default settings
-- User setup() function
-
-### Provider Interface (provider.lua)
-- Interface definition
-- Provider validation
-- Helper functions for common operations
-
-### Providers (providers/*.lua)
-- Language-specific implementations
-- Config file parsing/writing
-- LSP integration
 
 ## Common Pitfalls
 
-1. **Forgetting to reload modules**: Always clear `package.loaded` when testing changes
-
-2. **LSP not restarting**: Some LSPs need `:LspRestart` with the specific name, not just `:LspRestart`
-
-3. **Config file permissions**: Ensure plugin can write to project directory
-
-4. **State persistence**: Remember that picker state persists across invocations (by design)
-
-5. **Telescope refresh**: Closing and reopening the picker is intentional for UI refresh
-
-## Performance
-
-- Config parsing happens on-demand, not at startup
-- Category expansion (listing individual checks) can be slow for some tools
-- Consider caching expanded check lists if performance becomes an issue
-
-## Contributing
-
-1. Fork the repo
-2. Create a feature branch
-3. Add tests for new providers
-4. Update documentation
-5. Submit PR with clear description
-
-For questions: [open an issue](https://github.com/yourusername/diagnostic-picker.nvim/issues)
+- **Stale modules**: always clear `package.loaded` after editing Lua files
+- **`self` is nil in methods**: provider methods must be called with `:` not `.`
+- **Radio state key**: stored as `__<section_id>`, not the item name
+- **`expand_category` is slow**: it shells out per-category; results are not cached across picker opens
+- **User JSON overrides bundled**: same filetypes in user dir wins — useful for customisation, easy to shadow unintentionally

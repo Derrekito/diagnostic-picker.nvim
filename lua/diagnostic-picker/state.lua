@@ -13,14 +13,29 @@ M.state = {
   expanded = {}, -- Track which categories are expanded
 }
 
--- Initialize category state for a filetype
-M.init_category_state = function(ft, categories)
-  if not M.state[ft] then
-    M.state[ft] = {}
-    for _, cat in ipairs(categories or {}) do
-      -- Default to enabled
-      M.state[ft][cat.name] = true
+-- Initialize state for a filetype from provider sections (respects JSON defaults).
+-- No-op if state already exists for this ft.
+M.init_ft_state = function(ft, provider)
+  if M.state[ft] then return end
+  M.state[ft] = {}
+  if not provider then return end
+  for _, section in ipairs(provider.sections or {}) do
+    for _, item in ipairs(section.items or {}) do
+      if section.kind == "radio" then
+        -- Radio defaults are tracked per-section via __<section_id>, not per-item
+      else
+        M.state[ft][item.name] = item.default ~= false
+      end
     end
+  end
+end
+
+-- Kept for callers that haven't been updated yet; delegates to init_ft_state.
+M.init_category_state = function(ft, categories)
+  if M.state[ft] then return end
+  M.state[ft] = {}
+  for _, cat in ipairs(categories or {}) do
+    M.state[ft][cat.name] = cat.default ~= false
   end
 end
 

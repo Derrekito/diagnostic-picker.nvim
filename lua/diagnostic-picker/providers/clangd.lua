@@ -1,461 +1,457 @@
--- Clangd provider for C/C++
+-- Clangd provider (C/C++)
+-- Subclasses Provider; handles .clangd file generation and clang-tidy expansion.
 
-local M = {}
+local Provider = require("diagnostic-picker.provider_base")
 
--- Provider metadata
-M.name = "clangd"
-M.filetypes = { "c", "cpp" }
+local ClangdProvider = setmetatable({}, { __index = Provider })
+ClangdProvider.__index = ClangdProvider
 
--- Internal state for C++ standard
-local cpp_standard = "c++17" -- Default
-
--- Boolean compiler flags state (ordered for display)
-local compiler_flag_order = {
-  -- Broad sets
-  "-Wall",
-  "-Wextra",
-  "-Wpedantic",
-  "-Weverything",
-  -- Specific useful flags not in -Wall/-Wextra
-  "-Wshadow",
-  "-Wnon-virtual-dtor",
-  "-Wold-style-cast",
-  "-Wcast-align",
-  "-Wunused",
-  "-Woverloaded-virtual",
-  "-Wconversion",
-  "-Wsign-conversion",
-  "-Wmisleading-indentation",
-  "-Wnull-dereference",
-  "-Wdouble-promotion",
-  "-Wformat=2",
-  "-Wimplicit-fallthrough",
-  "-Wlifetime",
-}
-
-local compiler_flags = {}
-for _, flag in ipairs(compiler_flag_order) do
-  compiler_flags[flag] = false
+function ClangdProvider.new(config)
+  local self = Provider.new(config)
+  return setmetatable(self, ClangdProvider)
 end
 
--- C++ standard options
-local cpp_standards = {
-  "c++98", "c++03", "c++11", "c++14", "c++17", "c++20", "c++23", "c++26"
-}
+-- ── Config file parsing ──────────────────────────────────────────────────────
 
--- Parse YAML-like clangd config file
 local function parse_clangd_config(filepath)
-  local config = {
-    add_checks = {},
-    remove_checks = {},
-    compile_flags = {},
-    source = filepath
-  }
+  local result = { add_checks = {}, remove_checks = {}, compile_flags = {}, source = filepath }
+  local f = io.open(filepath, "r")
+  if not f then return result end
 
-  local file = io.open(filepath, "r")
-  if not file then return config end
+  local in_diagnostics, in_clang_tidy, in_add, in_remove = false, false, false, false
+  local in_compile_flags, in_compile_add = false, false
+  local in_flow_seq = false  -- inside a multi-line [...] flow sequence
 
-  local in_diagnostics = false
-  local in_clang_tidy = false
-  local in_add = false
-  local in_remove = false
-  local in_compile_flags = false
-  local in_compile_add = false
-
-  for line in file:lines() do
-    -- Track sections
-    if line:match("^Diagnostics:") then
-      in_diagnostics = true
-      in_compile_flags = false
-    elseif line:match("^CompileFlags:") then
-      in_compile_flags = true
-      in_diagnostics = false
-    elseif in_diagnostics and line:match("^%s+ClangTidy:") then
-      in_clang_tidy = true
-    elseif in_clang_tidy and line:match("^%s+Add:") then
-      in_add = true
-      in_remove = false
-    elseif in_clang_tidy and line:match("^%s+Remove:") then
-      in_remove = true
-      in_add = false
-    elseif in_compile_flags and line:match("^%s+Add:") then
-      in_compile_add = true
-    elseif line:match("^%S") then
-      -- Reset when we hit a new top-level section
-      in_add = false
-      in_remove = false
-      in_compile_add = false
-    end
-
-    -- Parse entries
-    if in_add and line:match("^%s+%-") then
-      local check = line:match("^%s+%-%s*(.+)$")
-      if check then
-        table.insert(config.add_checks, check)
-      end
-    elseif in_remove and line:match("^%s+%-") then
-      local check = line:match("^%s+%-%s*(.+)$")
-      if check then
-        table.insert(config.remove_checks, check)
-      end
-    elseif in_compile_add and line:match("^%s+%-") then
-      local flag = line:match("^%s+%-%s*\"(.+)\"$")
-      if flag then
-        table.insert(config.compile_flags, flag)
-      end
-    end
+  local function push(dest, raw)
+    local item = raw:match("^%s*(.-)%s*$")
+    item = item:match('^"(.+)"$') or item
+    if item ~= "" then table.insert(dest, item) end
   end
 
-  file:close()
-  return config
+  -- dest for the current flow sequence (set when [ is opened, cleared on ])
+  local flow_dest = nil
+
+  for line in f:lines() do
+    -- Flow-sequence continuation: items between [ and ] with no '-' prefix
+    if flow_dest then
+      if line:match("%]") then flow_dest = nil end
+      for entry in line:gmatch("([^%[%],%s]+)") do
+        push(flow_dest, entry)
+      end
+      goto continue
+    end
+
+    -- Section headers (order matters: check Add: before generic ^%S reset)
+    if     line:match("^Diagnostics:")                     then in_diagnostics = true;  in_compile_flags = false
+    elseif line:match("^CompileFlags:")                    then in_compile_flags = true; in_diagnostics = false
+    elseif in_diagnostics and line:match("^%s+ClangTidy:") then in_clang_tidy = true
+    elseif in_clang_tidy  and line:match("^%s+Add:")      then in_add = true;  in_remove = false
+    elseif in_clang_tidy  and line:match("^%s+Remove:")   then in_remove = true; in_add = false
+    elseif in_compile_flags and line:match("^%s+Add:")    then in_compile_add = true
+    elseif line:match("^%S")                               then in_add = false; in_remove = false; in_compile_add = false
+    end
+
+    -- Flow sequence on this line: Add: [a, b] or Add: [  (opening only)
+    local flow = line:match("%[(.*)$")
+    if flow and (in_add or in_remove) then
+      local dest = in_add and result.add_checks or result.remove_checks
+      local inner = flow:match("^(.-)%]") or flow  -- up to ] if present
+      for entry in inner:gmatch("([^,%s]+)") do push(dest, entry) end
+      if not flow:match("%]") then flow_dest = dest end  -- multi-line: keep reading
+      in_add = false; in_remove = false
+      goto continue
+    end
+
+    -- Block list: - item
+    local item = line:match("^%s+%-%s*(.+)$")
+    if item then
+      if in_add         then table.insert(result.add_checks, item)
+      elseif in_remove  then table.insert(result.remove_checks, item)
+      elseif in_compile_add then
+        table.insert(result.compile_flags, item:match('^"(.+)"$') or item)
+      end
+    end
+
+    ::continue::
+  end
+  f:close()
+  return result
 end
 
--- Get the active clangd configs (global + local merged)
 local function get_clangd_configs()
-  local global_config_path = vim.fn.expand("~/.config/clangd/config.yaml")
-  local local_config_path = vim.fn.getcwd() .. "/.clangd"
-
-  local configs = {
-    global = parse_clangd_config(global_config_path),
-    local_file = parse_clangd_config(local_config_path),
+  return {
+    global     = parse_clangd_config(vim.fn.expand("~/.config/clangd/config.yaml")),
+    local_file = parse_clangd_config(vim.fn.getcwd() .. "/.clangd"),
   }
-
-  -- Determine current C++ standard and boolean flags from configs
-  for _, config in pairs(configs) do
-    for _, flag in ipairs(config.compile_flags) do
-      local std = flag:match("^-std=(.+)")
-      if std then
-        cpp_standard = std
-      elseif compiler_flags[flag] ~= nil then
-        compiler_flags[flag] = true
-      end
-    end
-  end
-
-  return configs
 end
 
--- Get all configured checks (merged from configs)
-local function get_all_configured_checks()
+local function get_configured_checks()
+  local all = {}
   local configs = get_clangd_configs()
-  local all_checks = {}
-
-  -- Merge Add checks from both configs
-  for _, config in pairs(configs) do
-    for _, check in ipairs(config.add_checks) do
-      all_checks[check] = {
-        enabled = true,
-        source = config.source,
-        type = "add"
-      }
+  for _, cfg in pairs(configs) do
+    for _, check in ipairs(cfg.add_checks) do
+      all[check] = { enabled = true, source = cfg.source, type = "add" }
     end
   end
-
-  -- Apply Remove checks
-  for _, config in pairs(configs) do
-    for _, check in ipairs(config.remove_checks) do
-      if all_checks[check] then
-        all_checks[check].enabled = false
-        all_checks[check].removed_by = config.source
+  for _, cfg in pairs(configs) do
+    for _, check in ipairs(cfg.remove_checks) do
+      if all[check] then
+        all[check].enabled = false
+        all[check].removed_by = cfg.source
       else
-        all_checks[check] = {
-          enabled = false,
-          source = config.source,
-          type = "remove"
-        }
+        all[check] = { enabled = false, source = cfg.source, type = "remove" }
       end
     end
   end
-
-  return all_checks
+  return all
 end
 
--- Get config info string
-M.get_config_info = function()
-  local global_path = vim.fn.expand("~/.config/clangd/config.yaml")
-  local local_path = vim.fn.getcwd() .. "/.clangd"
-  local has_global = vim.fn.filereadable(global_path) == 1
-  local has_local = vim.fn.filereadable(local_path) == 1
+-- ── Available-category cache ─────────────────────────────────────────────────
 
-  if has_global and has_local then
-    return "Global + Local .clangd"
-  elseif has_global then
-    return "Global only"
-  elseif has_local then
-    return "Local .clangd only"
-  else
-    return "No config found"
-  end
-end
+local _available_categories = nil
 
--- Check if clangd is installed
-M.is_installed = function()
-  return vim.fn.executable("clangd") == 1
-end
-
--- Cache of available category prefixes (e.g. "modernize-*" -> true)
-local available_categories = nil
-
-local function get_available_categories()
-  if available_categories then return available_categories end
-  available_categories = {}
-  local handle = io.popen("clang-tidy --list-checks -checks='*' 2>/dev/null")
-  if not handle then return available_categories end
-  for line in handle:lines() do
+local function available_categories()
+  if _available_categories then return _available_categories end
+  _available_categories = {}
+  local h = io.popen("clang-tidy --list-checks -checks='*' 2>/dev/null")
+  if not h then return _available_categories end
+  for line in h:lines() do
     local check = line:match("^%s+(%S+)")
     if check then
       local prefix = check:match("^([^-]+-)")
-      if prefix then
-        available_categories[prefix .. "*"] = true
+      if prefix then _available_categories[prefix .. "*"] = true end
+    end
+  end
+  h:close()
+  return _available_categories
+end
+
+-- ── Provider interface ───────────────────────────────────────────────────────
+
+-- Read current state from existing config files so the picker reflects reality on open.
+-- Populate ft_state from existing config files so the picker reflects reality.
+-- Priority: local .clangd > global config.yaml > JSON defaults.
+-- Applied in order (global first, local second) so local values win.
+-- Called once on first open; if neither file exists ft_state keeps JSON defaults.
+function ClangdProvider:sync_state_from_files(ft_state)
+  local global_path = vim.fn.expand("~/.config/clangd/config.yaml")
+  local local_path  = vim.fn.getcwd() .. "/.clangd"
+  local has_global  = vim.fn.filereadable(global_path) == 1
+  local has_local   = vim.fn.filereadable(local_path) == 1
+
+  if not has_global and not has_local then
+    return  -- no config files; keep JSON defaults
+  end
+
+  -- Build lookup of all -W flags we manage so we can recognise them in config
+  local managed_flags = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "toggle" and section.apply_to == "compile_flags" then
+      for _, item in ipairs(section.items or {}) do
+        managed_flags[item.name] = true
       end
     end
   end
-  handle:close()
-  return available_categories
-end
 
--- Get language options (C++ standards + boolean compiler flags)
-M.get_language_options = function()
-  local options = {}
-
-  -- C++ standard (radio: only one selected at a time)
-  for _, std in ipairs(cpp_standards) do
-    table.insert(options, {
-      kind = "radio",
-      group = "C++ Standard",
-      name = std,
-      is_selected = (std == cpp_standard),
-    })
+  -- Start with all managed flags off; config files enable only what they list
+  for flag, _ in pairs(managed_flags) do
+    ft_state[flag] = false
   end
 
-  -- Boolean compiler flags (toggle: independent on/off)
-  for _, flag in ipairs(compiler_flag_order) do
-    table.insert(options, {
-      kind = "toggle",
-      group = "Compiler Flags",
-      name = flag,
-      is_selected = compiler_flags[flag],
-    })
+  -- Apply configs in priority order: global first, local second (local wins)
+  local ordered = {}
+  if has_global then table.insert(ordered, parse_clangd_config(global_path)) end
+  if has_local  then table.insert(ordered, parse_clangd_config(local_path)) end
+
+  for _, cfg in ipairs(ordered) do
+    for _, flag in ipairs(cfg.compile_flags) do
+      local std = flag:match("^-std=(.+)")
+      if std then
+        ft_state["__cpp_standard"] = std
+      elseif managed_flags[flag] then
+        ft_state[flag] = true
+      end
+    end
   end
 
-  return options
-end
+  -- Sync clang-tidy category state from config files.
+  -- When config files exist, only explicitly Added categories are on; everything
+  -- else is off. This prevents categories absent from the config from defaulting
+  -- to enabled (which would cause them to be written into the local .clangd on apply).
+  local configured = get_configured_checks()
+  local any_config = has_global or has_local
 
--- Set language option
-M.set_language_option = function(option_data, value)
-  if option_data.kind == "radio" then
-    cpp_standard = value
-  elseif option_data.kind == "toggle" then
-    compiler_flags[value] = not compiler_flags[value]
+  -- Collect all category names managed by this provider
+  local managed_categories = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "category" then
+      for _, item in ipairs(section.items or {}) do
+        managed_categories[item.name] = true
+      end
+    end
+  end
+
+  if any_config then
+    -- Start all categories off; only explicitly Added ones get turned on
+    for cat, _ in pairs(managed_categories) do
+      ft_state[cat] = false
+    end
+    for check, info in pairs(configured) do
+      if managed_categories[check] then
+        ft_state[check] = info.enabled
+      end
+    end
   end
 end
 
--- Get categories
-M.get_categories = function()
-  local configured_checks = get_all_configured_checks()
-  local opts = require("diagnostic-picker.config").get()
+-- get_categories: annotate items with availability and config-source info.
+function ClangdProvider:get_categories()
+  local avail   = available_categories()
+  local configured = get_configured_checks()
+  local plugin_opts = require("diagnostic-picker.config").get()
+  local categories = {}
 
-  local categories = {
-    { name = "modernize-*",          desc = "Modern C++",        expandable = true },
-    { name = "readability-*",        desc = "Readability",       expandable = true },
-    { name = "performance-*",        desc = "Performance",       expandable = true },
-    { name = "bugprone-*",           desc = "Bug-prone",         expandable = true },
-    { name = "cppcoreguidelines-*",  desc = "Core Guidelines",   expandable = true },
-    { name = "clang-analyzer-*",     desc = "Static analyzer",   expandable = true },
-    { name = "misc-*",               desc = "Miscellaneous",     expandable = true },
-    { name = "cert-*",               desc = "CERT",              expandable = true },
-    { name = "google-*",             desc = "Google style",      expandable = true },
-    { name = "hicpp-*",              desc = "High Integrity C++", expandable = true },
-    { name = "portability-*",        desc = "Portability",       expandable = true },
-    { name = "concurrency-*",        desc = "Concurrency",       expandable = true },
-    { name = "llvm-*",               desc = "LLVM",              expandable = true },
-    { name = "abseil-*",             desc = "Abseil",            expandable = true },
-    { name = "boost-*",              desc = "Boost",             expandable = true },
-    { name = "android-*",            desc = "Android",           expandable = true },
-    { name = "fuchsia-*",            desc = "Fuchsia",           expandable = true },
-    { name = "linuxkernel-*",        desc = "Linux Kernel",      expandable = true },
-    { name = "mpi-*",                desc = "MPI",               expandable = true },
-    { name = "openmp-*",             desc = "OpenMP",            expandable = true },
-    { name = "zircon-*",             desc = "Zircon",            expandable = true },
-  }
+  for _, section in ipairs(self.sections) do
+    if section.kind == "category" then
+      for _, item in ipairs(section.items or {}) do
+        local cat = vim.tbl_extend("keep", {}, item)
+        cat.expandable   = section.expandable
+        cat.not_installed = not avail[item.name]
 
-  local available = get_available_categories()
-
-  for _, cat in ipairs(categories) do
-    -- Mark unavailable categories
-    cat.not_installed = not available[cat.name]
-    -- Skip config source check for unavailable categories
-    if not cat.not_installed then
-      local config_source = ""
-      for check_pattern, check_info in pairs(configured_checks) do
-        if check_pattern == cat.name then
-          local icon = check_info.source:match("config.yaml") and opts.icons.global_config or opts.icons.local_config
-          config_source = " " .. icon
-          break
+        if not cat.not_installed then
+          local src = ""
+          if configured[item.name] then
+            local info = configured[item.name]
+            local icon = info.source:match("config.yaml")
+              and plugin_opts.icons.global_config
+              or  plugin_opts.icons.local_config
+            src = " " .. icon
+            if info.type == "remove" then src = src .. plugin_opts.icons.disabled end
+          end
+          cat.config_source = src
         end
+
+        table.insert(categories, cat)
       end
-      cat.config_source = config_source
     end
   end
-
   return categories
 end
 
--- Expand category to individual checks
-M.expand_category = function(category)
-  local handle = io.popen("clang-tidy --list-checks -checks='" .. category .. "' 2>/dev/null")
-  if not handle then return {} end
+-- get_language_options: return radio + toggle sections for the UI.
+-- ft must be the filetype captured before the picker opened (vim.bo.filetype
+-- is unreliable inside Telescope because focus moves to the prompt buffer).
+function ClangdProvider:get_language_options(ft)
+  local opts = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "radio" or (section.kind == "toggle" and section.apply_to == "compile_flags") then
+      for _, item in ipairs(section.items or {}) do
+        table.insert(opts, {
+          kind     = section.kind,
+          group    = section.title,
+          name     = item.name,
+          desc     = item.desc,
+          is_selected = self:_item_is_selected(section, item, ft),
+        })
+      end
+    end
+  end
+  return opts
+end
 
-  local checks = {}
-  local configured = get_all_configured_checks()
-  local opts = require("diagnostic-picker.config").get()
+-- _item_is_selected: check current in-memory state for this item.
+function ClangdProvider:_item_is_selected(section, item, ft)
+  local ft_state = require("diagnostic-picker.state").state[ft or vim.bo.filetype] or {}
+  if section.kind == "radio" then
+    -- Radio: compare against the stored selected value
+    local selected = ft_state["__" .. section.id] or self:_default_radio(section)
+    return item.name == selected
+  else
+    local val = ft_state[item.name]
+    if val == nil then return item.default ~= false end
+    return val
+  end
+end
 
-  for line in handle:lines() do
-    local check = line:match("^%s*(" .. category:gsub("%*", "[^%s]+") .. ")%s*$")
-    if check then
-      -- Determine config source for this check
-      local check_source = ""
-      if configured[check] then
-        local info = configured[check]
-        if info.source:match("config.yaml") then
-          check_source = " " .. opts.icons.global_config
-        elseif info.source:match(".clangd") then
-          check_source = " " .. opts.icons.local_config
-        end
-        if info.type == "remove" then
-          check_source = check_source .. opts.icons.disabled
+function ClangdProvider:_default_radio(section)
+  for _, item in ipairs(section.items or {}) do
+    if item.default then return item.name end
+  end
+  return section.items[1] and section.items[1].name or ""
+end
+
+-- set_language_option: called when user presses Space on a radio/toggle item.
+-- ft must be passed explicitly; vim.bo.filetype is wrong inside Telescope callbacks.
+function ClangdProvider:set_language_option(option_data, value, ft)
+  ft = ft or vim.bo.filetype
+  local state  = require("diagnostic-picker.state").state
+  if not state[ft] then state[ft] = {} end
+
+  if option_data.kind == "radio" then
+    -- Find which section this item belongs to and store selected name
+    for _, section in ipairs(self.sections) do
+      if section.kind == "radio" then
+        for _, item in ipairs(section.items or {}) do
+          if item.name == value then
+            state[ft]["__" .. section.id] = value
+            return
+          end
         end
       end
+    end
+  elseif option_data.kind == "toggle" then
+    state[ft][value] = not (state[ft][value] ~= false and state[ft][value] ~= nil and state[ft][value] or false)
+  end
+end
 
-      table.insert(checks, {
-        name = check,
-        config_source = check_source,
-      })
+-- get_config_info: summary string for the picker header.
+function ClangdProvider:get_config_info()
+  local has_global = vim.fn.filereadable(vim.fn.expand("~/.config/clangd/config.yaml")) == 1
+  local has_local  = vim.fn.filereadable(vim.fn.getcwd() .. "/.clangd") == 1
+  if has_global and has_local then return "Global + Local .clangd"
+  elseif has_global            then return "Global only"
+  elseif has_local             then return "Local .clangd only"
+  else                              return "No config found"
+  end
+end
+
+-- expand_category: shell out to clang-tidy to list individual checks.
+function ClangdProvider:expand_category(category_name)
+  local handle = io.popen("clang-tidy --list-checks -checks='" .. category_name .. "' 2>/dev/null")
+  if not handle then return {} end
+
+  local checks     = {}
+  local configured = get_configured_checks()
+  local icons      = require("diagnostic-picker.config").get().icons
+  local pattern    = "^%s*(" .. category_name:gsub("%*", "[^%s]+") .. ")%s*$"
+
+  for line in handle:lines() do
+    local check = line:match(pattern)
+    if check then
+      local src = ""
+      if configured[check] then
+        local info = configured[check]
+        src = " " .. (info.source:match("config.yaml") and icons.global_config or icons.local_config)
+        if info.type == "remove" then src = src .. icons.disabled end
+      end
+      table.insert(checks, { name = check, config_source = src })
     end
   end
   handle:close()
   return checks
 end
 
--- Apply configuration
-M.apply_config = function(state)
-  local ft = vim.bo.filetype
+-- apply_config: write .clangd file from current state.
+function ClangdProvider:apply_config(current_state)
+  local ft         = vim.bo.filetype
   local clangd_path = vim.fn.getcwd() .. "/.clangd"
+  local ft_state   = current_state[ft] or {}
 
-  -- Build list of disabled checks
-  local remove_checks = {}
-  if state[ft] then
-    for check, enabled in pairs(state[ft]) do
-      if not enabled and type(check) == "string" then
-        table.insert(remove_checks, check)
+  -- Resolve C++ standard (radio)
+  local cpp_std = ft_state["__cpp_standard"]
+  if not cpp_std then
+    for _, section in ipairs(self.sections) do
+      if section.kind == "radio" then
+        cpp_std = self:_default_radio(section)
+        break
       end
+    end
+  end
+
+  -- Collect enabled compile flags (toggles with apply_to=compile_flags)
+  local compile_flags = { ("-std=" .. cpp_std) }
+  for _, section in ipairs(self.sections) do
+    if section.kind == "toggle" and section.apply_to == "compile_flags" then
+      for _, item in ipairs(section.items or {}) do
+        local enabled = ft_state[item.name]
+        if enabled == nil then enabled = item.default ~= false end
+        if enabled then table.insert(compile_flags, item.name) end
+      end
+    end
+  end
+
+  -- Collect disabled clang-tidy checks
+  local remove_checks = {}
+  for name, enabled in pairs(ft_state) do
+    if not enabled and type(name) == "string" and not name:match("^__") and not name:match("^%-") then
+      table.insert(remove_checks, name)
     end
   end
   table.sort(remove_checks)
 
-  -- Get current configs to preserve enabled checks from global config
-  local enabled_from_global = {}
-  for check, info in pairs(get_all_configured_checks()) do
+  -- Preserve enabled checks from global config
+  local add_checks = {}
+  for check, info in pairs(get_configured_checks()) do
     if info.enabled and info.source:match("config.yaml") then
-      table.insert(enabled_from_global, check)
+      table.insert(add_checks, check)
     end
   end
 
-  -- Build new config content
-  local config_lines = {}
-  table.insert(config_lines, "# Local clangd overrides")
-  table.insert(config_lines, "# Generated by diagnostic-picker.nvim")
-  table.insert(config_lines, "# This file overrides settings from ~/.config/clangd/config.yaml")
-  table.insert(config_lines, "")
-
-  -- CompileFlags section (C++ standard + boolean flags)
-  table.insert(config_lines, "CompileFlags:")
-  table.insert(config_lines, "  Add:")
-  table.insert(config_lines, '    - "-std=' .. cpp_standard .. '"')
-  for flag, enabled in pairs(compiler_flags) do
-    if enabled then
-      table.insert(config_lines, '    - "' .. flag .. '"')
-    end
-  end
-  table.insert(config_lines, "")
-
-  -- Diagnostics section
-  table.insert(config_lines, "Diagnostics:")
-  table.insert(config_lines, "  ClangTidy:")
-
-  -- Add section (preserves global config)
-  if #enabled_from_global > 0 then
-    table.insert(config_lines, "    Add:")
-    for _, check in ipairs(enabled_from_global) do
-      table.insert(config_lines, "      - " .. check)
-    end
-  end
-
-  -- Remove section (runtime toggles)
-  if #remove_checks > 0 then
-    table.insert(config_lines, "    Remove:")
-    for _, check in ipairs(remove_checks) do
-      table.insert(config_lines, "      - " .. check)
-    end
-  else
-    table.insert(config_lines, "    Remove: []")
-  end
-
-  -- Write config
-  local has_existing = vim.fn.filereadable(clangd_path) == 1
-  local file = io.open(clangd_path, "w")
-  if file then
-    for _, line in ipairs(config_lines) do
-      file:write(line .. "\n")
-    end
-    file:close()
-
-    local action = has_existing and "Updated" or "Created"
-    local message = action .. " " .. clangd_path .. "\n" ..
-                    "C++ standard: " .. cpp_standard .. "\n" ..
-                    "Disabled checks: " .. #remove_checks
-
-    -- Automatically restart clangd
-    vim.schedule(function()
-      local clients = vim.lsp.get_clients({ name = "clangd" })
-      for _, client in ipairs(clients) do
-        vim.lsp.stop_client(client.id, true)
+  -- Build the set of -W flags we're managing so we can remove them first,
+  -- preventing duplication with whatever the global config already adds.
+  local managed_w_flags = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "toggle" and section.apply_to == "compile_flags" then
+      for _, item in ipairs(section.items or {}) do
+        table.insert(managed_w_flags, item.name)
       end
-      -- Brief delay then restart by re-triggering filetype detection
-      vim.defer_fn(function()
-        if vim.fn.exists(":LspStart") == 2 then
-          vim.cmd("LspStart clangd")
-        else
-          vim.cmd("edit")
-        end
-      end, 500)
-    end)
-
-    return {
-      success = true,
-      message = message
-    }
-  else
-    return {
-      success = false,
-      message = "Error: Could not write to " .. clangd_path
-    }
-  end
-end
-
--- Restart LSP
-M.restart_lsp = function()
-  local clients = vim.lsp.get_clients({ name = "clangd" })
-  for _, client in ipairs(clients) do
-    vim.lsp.stop_client(client.id, true)
-  end
-  vim.defer_fn(function()
-    if vim.fn.exists(":LspStart") == 2 then
-      vim.cmd("LspStart clangd")
-    else
-      vim.cmd("edit")
     end
-  end, 500)
+  end
+
+  -- Write .clangd
+  -- CompileFlags.Remove strips flags inherited from the global config.yaml before
+  -- we add ours, preventing duplicates like "-std=c++17 ... -std=c++17" in the
+  -- compile command. clangd merges local and global configs additively, so without
+  -- Remove the global flags survive alongside our local ones.
+  local lines = {
+    "# Local clangd overrides — generated by diagnostic-picker.nvim",
+    "",
+    "CompileFlags:",
+    "  Remove:",
+    '    - "-std=*"',  -- strip any global -std= so our selection is the only one
+  }
+  for _, flag in ipairs(managed_w_flags) do
+    -- strip all -W flags we manage so only the user's current selection survives
+    table.insert(lines, '    - "' .. flag .. '"')
+  end
+  table.insert(lines, "  Add:")
+  for _, flag in ipairs(compile_flags) do
+    table.insert(lines, '    - "' .. flag .. '"')
+  end
+  table.insert(lines, "")
+  table.insert(lines, "Diagnostics:")
+  table.insert(lines, "  ClangTidy:")
+  if #add_checks > 0 then
+    table.insert(lines, "    Add:")
+    for _, c in ipairs(add_checks) do table.insert(lines, "      - " .. c) end
+  end
+  if #remove_checks > 0 then
+    table.insert(lines, "    Remove:")
+    for _, c in ipairs(remove_checks) do table.insert(lines, "      - " .. c) end
+  else
+    table.insert(lines, "    Remove: []")
+  end
+
+  local existing = vim.fn.filereadable(clangd_path) == 1
+  local f = io.open(clangd_path, "w")
+  if not f then
+    return { success = false, message = "Could not write " .. clangd_path }
+  end
+  for _, line in ipairs(lines) do f:write(line .. "\n") end
+  f:close()
+
+  self:restart_lsp()
+
+  return {
+    success = true,
+    message = (existing and "Updated" or "Created") .. " " .. clangd_path
+      .. "\nC++ standard: " .. cpp_std
+      .. "\nDisabled checks: " .. #remove_checks,
+  }
 end
 
-return M
+function ClangdProvider:is_installed()
+  return vim.fn.executable("clangd") == 1
+end
+
+return ClangdProvider
