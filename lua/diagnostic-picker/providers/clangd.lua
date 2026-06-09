@@ -11,6 +11,21 @@ function ClangdProvider.new(config)
   return setmetatable(self, ClangdProvider)
 end
 
+-- ── Project root resolution ──────────────────────────────────────────────────
+
+-- Get the project root for the LSP client attached to bufnr.
+-- Falls back to vim.fn.getcwd() if no clangd client is attached.
+local function get_project_root(bufnr)
+  if bufnr then
+    local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "clangd" })
+    if clients and #clients > 0 then
+      local root = clients[1].config and clients[1].config.root_dir
+      if root then return root end
+    end
+  end
+  return vim.fn.getcwd()
+end
+
 -- ── Config file parsing ──────────────────────────────────────────────────────
 
 local function parse_clangd_config(filepath)
@@ -78,16 +93,17 @@ local function parse_clangd_config(filepath)
   return result
 end
 
-local function get_clangd_configs()
+local function get_clangd_configs(project_root)
+  project_root = project_root or vim.fn.getcwd()
   return {
     global     = parse_clangd_config(vim.fn.expand("~/.config/clangd/config.yaml")),
-    local_file = parse_clangd_config(vim.fn.getcwd() .. "/.clangd"),
+    local_file = parse_clangd_config(project_root .. "/.clangd"),
   }
 end
 
-local function get_configured_checks()
+local function get_configured_checks(project_root)
   local all = {}
-  local configs = get_clangd_configs()
+  local configs = get_clangd_configs(project_root)
   for _, cfg in pairs(configs) do
     for _, check in ipairs(cfg.add_checks) do
       all[check] = { enabled = true, source = cfg.source, type = "add" }
@@ -129,13 +145,14 @@ end
 -- ── Provider interface ───────────────────────────────────────────────────────
 
 -- Read current state from existing config files so the picker reflects reality on open.
--- Populate ft_state from existing config files so the picker reflects reality.
+-- Populate buf_state from existing config files so the picker reflects reality.
 -- Priority: local .clangd > global config.yaml > JSON defaults.
 -- Applied in order (global first, local second) so local values win.
--- Called once on first open; if neither file exists ft_state keeps JSON defaults.
-function ClangdProvider:sync_state_from_files(ft_state)
+-- Called once on first open; if neither file exists buf_state keeps JSON defaults.
+function ClangdProvider:sync_state_from_files(buf_state, bufnr)
+  local project_root = get_project_root(bufnr)
   local global_path = vim.fn.expand("~/.config/clangd/config.yaml")
-  local local_path  = vim.fn.getcwd() .. "/.clangd"
+  local local_path  = project_root .. "/.clangd"
   local has_global  = vim.fn.filereadable(global_path) == 1
   local has_local   = vim.fn.filereadable(local_path) == 1
 
@@ -155,7 +172,7 @@ function ClangdProvider:sync_state_from_files(ft_state)
 
   -- Start with all managed flags off; config files enable only what they list
   for flag, _ in pairs(managed_flags) do
-    ft_state[flag] = false
+    buf_state[flag] = false
   end
 
   -- Apply configs in priority order: global first, local second (local wins)
@@ -167,9 +184,9 @@ function ClangdProvider:sync_state_from_files(ft_state)
     for _, flag in ipairs(cfg.compile_flags) do
       local std = flag:match("^-std=(.+)")
       if std then
-        ft_state["__cpp_standard"] = std
+        buf_state["__cpp_standard"] = std
       elseif managed_flags[flag] then
-        ft_state[flag] = true
+        buf_state[flag] = true
       end
     end
   end
@@ -178,7 +195,7 @@ function ClangdProvider:sync_state_from_files(ft_state)
   -- When config files exist, only explicitly Added categories are on; everything
   -- else is off. This prevents categories absent from the config from defaulting
   -- to enabled (which would cause them to be written into the local .clangd on apply).
-  local configured = get_configured_checks()
+  local configured = get_configured_checks(project_root)
   local any_config = has_global or has_local
 
   -- Collect all category names managed by this provider
@@ -194,20 +211,21 @@ function ClangdProvider:sync_state_from_files(ft_state)
   if any_config then
     -- Start all categories off; only explicitly Added ones get turned on
     for cat, _ in pairs(managed_categories) do
-      ft_state[cat] = false
+      buf_state[cat] = false
     end
     for check, info in pairs(configured) do
       if managed_categories[check] then
-        ft_state[check] = info.enabled
+        buf_state[check] = info.enabled
       end
     end
   end
 end
 
 -- get_categories: annotate items with availability and config-source info.
-function ClangdProvider:get_categories()
+function ClangdProvider:get_categories(bufnr)
+  local project_root = get_project_root(bufnr)
   local avail   = available_categories()
-  local configured = get_configured_checks()
+  local configured = get_configured_checks(project_root)
   local plugin_opts = require("diagnostic-picker.config").get()
   local categories = {}
 
@@ -239,9 +257,9 @@ function ClangdProvider:get_categories()
 end
 
 -- get_language_options: return radio + toggle sections for the UI.
--- ft must be the filetype captured before the picker opened (vim.bo.filetype
+-- bufnr must be the buffer captured before the picker opened (vim.bo.filetype
 -- is unreliable inside Telescope because focus moves to the prompt buffer).
-function ClangdProvider:get_language_options(ft)
+function ClangdProvider:get_language_options(bufnr)
   local opts = {}
   for _, section in ipairs(self.sections) do
     if section.kind == "radio" or (section.kind == "toggle" and section.apply_to == "compile_flags") then
@@ -251,7 +269,7 @@ function ClangdProvider:get_language_options(ft)
           group    = section.title,
           name     = item.name,
           desc     = item.desc,
-          is_selected = self:_item_is_selected(section, item, ft),
+          is_selected = self:_item_is_selected(section, item, bufnr),
         })
       end
     end
@@ -260,14 +278,20 @@ function ClangdProvider:get_language_options(ft)
 end
 
 -- _item_is_selected: check current in-memory state for this item.
-function ClangdProvider:_item_is_selected(section, item, ft)
-  local ft_state = require("diagnostic-picker.state").state[ft or vim.bo.filetype] or {}
+-- key is bufnr (integer) in production; may be an ft string when called from tests.
+function ClangdProvider:_item_is_selected(section, item, key)
+  -- key can be a bufnr (integer) or ft string (from tests/legacy callers)
+  local lookup_key = key
+  if lookup_key == nil then
+    lookup_key = vim.bo.filetype
+  end
+  local buf_state = require("diagnostic-picker.state").state[lookup_key] or {}
   if section.kind == "radio" then
     -- Radio: compare against the stored selected value
-    local selected = ft_state["__" .. section.id] or self:_default_radio(section)
+    local selected = buf_state["__" .. section.id] or self:_default_radio(section)
     return item.name == selected
   else
-    local val = ft_state[item.name]
+    local val = buf_state[item.name]
     if val == nil then return item.default ~= false end
     return val
   end
@@ -281,11 +305,12 @@ function ClangdProvider:_default_radio(section)
 end
 
 -- set_language_option: called when user presses Space on a radio/toggle item.
--- ft must be passed explicitly; vim.bo.filetype is wrong inside Telescope callbacks.
-function ClangdProvider:set_language_option(option_data, value, ft)
-  ft = ft or vim.bo.filetype
+-- key must be passed explicitly; vim.bo.filetype is wrong inside Telescope callbacks.
+-- key is bufnr (integer) in production; may be ft string in tests/legacy callers.
+function ClangdProvider:set_language_option(option_data, value, key)
+  if key == nil then key = vim.bo.filetype end
   local state  = require("diagnostic-picker.state").state
-  if not state[ft] then state[ft] = {} end
+  if not state[key] then state[key] = {} end
 
   if option_data.kind == "radio" then
     -- Find which section this item belongs to and store selected name
@@ -293,21 +318,22 @@ function ClangdProvider:set_language_option(option_data, value, ft)
       if section.kind == "radio" then
         for _, item in ipairs(section.items or {}) do
           if item.name == value then
-            state[ft]["__" .. section.id] = value
+            state[key]["__" .. section.id] = value
             return
           end
         end
       end
     end
   elseif option_data.kind == "toggle" then
-    state[ft][value] = not (state[ft][value] ~= false and state[ft][value] ~= nil and state[ft][value] or false)
+    state[key][value] = not (state[key][value] ~= false and state[key][value] ~= nil and state[key][value] or false)
   end
 end
 
 -- get_config_info: summary string for the picker header.
-function ClangdProvider:get_config_info()
+function ClangdProvider:get_config_info(bufnr)
+  local project_root = get_project_root(bufnr)
   local has_global = vim.fn.filereadable(vim.fn.expand("~/.config/clangd/config.yaml")) == 1
-  local has_local  = vim.fn.filereadable(vim.fn.getcwd() .. "/.clangd") == 1
+  local has_local  = vim.fn.filereadable(project_root .. "/.clangd") == 1
   if has_global and has_local then return "Global + Local .clangd"
   elseif has_global            then return "Global only"
   elseif has_local             then return "Local .clangd only"
@@ -342,13 +368,16 @@ function ClangdProvider:expand_category(category_name)
 end
 
 -- apply_config: write .clangd file from current state.
-function ClangdProvider:apply_config(current_state)
-  local ft         = vim.bo.filetype
-  local clangd_path = vim.fn.getcwd() .. "/.clangd"
-  local ft_state   = current_state[ft] or {}
+-- current_state is the full state table (keyed by bufnr or ft string).
+-- bufnr: the buffer that was active when the picker opened.
+function ClangdProvider:apply_config(current_state, bufnr)
+  local project_root = get_project_root(bufnr)
+  local ft           = bufnr and vim.bo[bufnr].filetype or vim.bo.filetype
+  local clangd_path  = project_root .. "/.clangd"
+  local buf_state    = current_state[bufnr] or current_state[ft] or {}
 
   -- Resolve C++ standard (radio)
-  local cpp_std = ft_state["__cpp_standard"]
+  local cpp_std = buf_state["__cpp_standard"]
   if not cpp_std then
     for _, section in ipairs(self.sections) do
       if section.kind == "radio" then
@@ -363,7 +392,7 @@ function ClangdProvider:apply_config(current_state)
   for _, section in ipairs(self.sections) do
     if section.kind == "toggle" and section.apply_to == "compile_flags" then
       for _, item in ipairs(section.items or {}) do
-        local enabled = ft_state[item.name]
+        local enabled = buf_state[item.name]
         if enabled == nil then enabled = item.default ~= false end
         if enabled then table.insert(compile_flags, item.name) end
       end
@@ -372,7 +401,7 @@ function ClangdProvider:apply_config(current_state)
 
   -- Collect disabled clang-tidy checks
   local remove_checks = {}
-  for name, enabled in pairs(ft_state) do
+  for name, enabled in pairs(buf_state) do
     if not enabled and type(name) == "string" and not name:match("^__") and not name:match("^%-") then
       table.insert(remove_checks, name)
     end
@@ -381,7 +410,7 @@ function ClangdProvider:apply_config(current_state)
 
   -- Preserve enabled checks from global config
   local add_checks = {}
-  for check, info in pairs(get_configured_checks()) do
+  for check, info in pairs(get_configured_checks(project_root)) do
     if info.enabled and info.source:match("config.yaml") then
       table.insert(add_checks, check)
     end
@@ -440,7 +469,7 @@ function ClangdProvider:apply_config(current_state)
   for _, line in ipairs(lines) do f:write(line .. "\n") end
   f:close()
 
-  self:restart_lsp()
+  self:restart_lsp(bufnr)
 
   return {
     success = true,

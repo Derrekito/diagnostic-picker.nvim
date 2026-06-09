@@ -73,7 +73,7 @@ M.make_entry = function(entry, provider)
         hl_group = "DiagnosticError",
       }
     end
-    local enabled = state.is_enabled(entry.ft, entry.name)
+    local enabled = state.is_enabled(entry.bufnr, entry.name)
     local expanded = state.is_expanded(entry.name)
     local expand_icon = entry.expandable and (expanded and "[-] " or "[+] ") or ""
     local prefix = enabled and "[✓] " or "[ ] "
@@ -85,7 +85,7 @@ M.make_entry = function(entry, provider)
       ordinal = entry.name,
     }
   elseif entry.type == "check" then
-    local enabled = state.is_enabled(entry.ft, entry.name)
+    local enabled = state.is_enabled(entry.bufnr, entry.name)
     local prefix = enabled and "[✓] " or "[ ] "
     local source_indicator = entry.config_source or ""
 
@@ -97,10 +97,10 @@ M.make_entry = function(entry, provider)
   end
 end
 
--- Build items list for current filetype.
+-- Build items list for current buffer.
 -- force_expand: when true (filtering active), include all sub-checks regardless of expand state.
-M.build_items = function(ft, provider, force_expand)
-  debug_print("build_items called with ft =", ft)
+M.build_items = function(ft, provider, force_expand, bufnr)
+  debug_print("build_items called with ft =", ft, "bufnr =", tostring(bufnr))
 
   local items = {
     { type = "header", display = "=== Severity Levels ===" },
@@ -114,7 +114,7 @@ M.build_items = function(ft, provider, force_expand)
   if provider then
     -- Add language options grouped by their group field
     if provider.get_language_options then
-      local lang_opts = provider:get_language_options(ft)
+      local lang_opts = provider:get_language_options(bufnr)
       if lang_opts and #lang_opts > 0 then
         local current_group = nil
         for _, opt in ipairs(lang_opts) do
@@ -135,7 +135,7 @@ M.build_items = function(ft, provider, force_expand)
     -- Add categories header with config info
     local header_text = "=== " .. ft:upper() .. " Linter Categories"
     if provider.get_config_info then
-      local info = provider:get_config_info()
+      local info = provider:get_config_info(bufnr)
       if info then
         header_text = header_text .. " (" .. info .. ")"
       end
@@ -144,14 +144,14 @@ M.build_items = function(ft, provider, force_expand)
     table.insert(items, { type = "header", display = header_text })
 
     -- Get categories from provider
-    local categories = provider:get_categories()
+    local categories = provider:get_categories(bufnr)
     debug_print("categories for", ft, ":", categories and #categories or "nil")
 
     if categories and #categories > 0 then
       for _, cat in ipairs(categories) do
         table.insert(items, {
           type = "category",
-          ft = ft,
+          bufnr = bufnr,
           name = cat.name,
           desc = cat.desc,
           expandable = cat.expandable,
@@ -165,7 +165,7 @@ M.build_items = function(ft, provider, force_expand)
           for _, check in ipairs(checks) do
             table.insert(items, {
               type = "check",
-              ft = ft,
+              bufnr = bufnr,
               name = check.name or check,
               parent = cat.name,
               config_source = check.config_source,
@@ -188,8 +188,8 @@ end
 -- Rebuild the finder and refresh the picker in-place.
 -- restore_row: if given, explicitly set cursor to this row after refresh (for expand/collapse).
 -- The picker always uses selection_strategy="row" so simple toggles keep cursor automatically.
-local function refresh_picker(current_picker, ft, provider, restore_row, force_expand)
-  local new_items = M.build_items(ft, provider, force_expand)
+local function refresh_picker(current_picker, ft, provider, restore_row, force_expand, bufnr)
+  local new_items = M.build_items(ft, provider, force_expand, bufnr)
 
   local new_finder = finders.new_table({
     results = new_items,
@@ -227,27 +227,30 @@ M.show = function(opts)
     initial_mode = "normal",
   })
 
-  -- Get current filetype BEFORE opening picker
-  local original_ft = vim.bo.filetype
+  -- Get current buffer and filetype BEFORE opening picker
+  local original_bufnr = vim.api.nvim_get_current_buf()
+  local original_ft = vim.bo[original_bufnr].filetype
   local provider = provider_registry.get_for_filetype(original_ft)
 
-  -- Initialize state for this filetype on first open.
+  state.init_severities()
+
+  -- Initialize state for this buffer on first open.
   -- sync_state_from_files reads existing config files and populates state to
   -- reflect reality; if no config file exists the JSON defaults are kept.
   if provider then
-    local is_first_open = state.state[original_ft] == nil
-    state.init_ft_state(original_ft, provider)
+    local is_first_open = state.state[original_bufnr] == nil
+    state.init_buf_state(original_bufnr, provider)
     if is_first_open and provider.sync_state_from_files then
-      provider:sync_state_from_files(state.state[original_ft])
+      provider:sync_state_from_files(state.state[original_bufnr], original_bufnr)
     end
   end
 
-  local items = M.build_items(original_ft, provider)
+  local items = M.build_items(original_ft, provider, false, original_bufnr)
 
   local filter_active = false
 
   local function make_finder(force_expand)
-    local built = M.build_items(original_ft, provider, force_expand)
+    local built = M.build_items(original_ft, provider, force_expand, original_bufnr)
     return finders.new_table({
       results = built,
       entry_maker = function(entry)
@@ -257,7 +260,7 @@ M.show = function(opts)
   end
 
   pickers.new(opts, {
-    prompt_title = "Diagnostic Settings (Space=toggle, Tab=expand, Enter=apply)",
+    prompt_title = "Diagnostic Settings (Space=toggle, Tab=expand, Enter=apply session, gs=save to disk)",
     finder = make_finder(false),
     sorter = conf.generic_sorter(opts),
     selection_strategy = "row",
@@ -277,10 +280,16 @@ M.show = function(opts)
         end,
       })
 
-      -- Enter to apply
+      -- Enter: apply session-only (no file write)
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
-        require("diagnostic-picker").apply_config()
+        require("diagnostic-picker").apply_config(original_bufnr)
+      end)
+
+      -- gs: save to disk + restart LSP
+      map("n", "gs", function()
+        actions.close(prompt_bufnr)
+        require("diagnostic-picker").save_config(original_bufnr)
       end)
 
       -- Space to toggle selection (normal mode)
@@ -299,24 +308,24 @@ M.show = function(opts)
           state.toggle_severity(entry.name)
         elseif entry.type == "language_option" then
           if provider and provider.set_language_option then
-            provider:set_language_option(entry.provider_data, entry.name, original_ft)
+            provider:set_language_option(entry.provider_data, entry.name, original_bufnr)
           end
         elseif entry.type == "category" then
-          state.toggle_category(entry.ft, entry.name)
-          local new_value = state.is_enabled(entry.ft, entry.name)
+          state.toggle_category(entry.bufnr, entry.name)
+          local new_value = state.is_enabled(entry.bufnr, entry.name)
           if provider and provider.expand_category then
             local checks = provider:expand_category(entry.name)
             for _, check in ipairs(checks) do
               local check_name = check.name or check
-              if not state.state[entry.ft] then state.state[entry.ft] = {} end
-              state.state[entry.ft][check_name] = new_value
+              if not state.state[entry.bufnr] then state.state[entry.bufnr] = {} end
+              state.state[entry.bufnr][check_name] = new_value
             end
           end
         elseif entry.type == "check" then
-          state.toggle_check(entry.ft, entry.name)
+          state.toggle_check(entry.bufnr, entry.name)
         end
 
-        refresh_picker(current_picker, original_ft, provider, nil, filter_active)
+        refresh_picker(current_picker, original_ft, provider, nil, filter_active, original_bufnr)
       end
 
       map("n", "<Space>", toggle_fn)
@@ -334,7 +343,7 @@ M.show = function(opts)
           local current_row = current_picker:get_selection_row()
           state.toggle_expanded(entry.name)
           debug_print("expand/collapse", entry.name, "now =", state.is_expanded(entry.name))
-          refresh_picker(current_picker, original_ft, provider, current_row, filter_active)
+          refresh_picker(current_picker, original_ft, provider, current_row, filter_active, original_bufnr)
         end
       end)
 

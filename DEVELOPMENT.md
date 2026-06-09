@@ -118,6 +118,20 @@ Provider (provider_base.lua)
 | `get_config_info()` | returns `nil` |
 | `is_installed()` | checks `vim.fn.executable(lsp_name)` |
 
+## Picker key bindings
+
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle item |
+| `Tab` | Expand/collapse category |
+| `Enter` | Apply severity filter for this session (no file I/O) |
+| `gs` | Save provider config to disk + restart LSP |
+
+`save_config()` is also a public function users can bind externally:
+```lua
+vim.keymap.set("n", "<leader>dG", require("diagnostic-picker").save_config)
+```
+
 ## Adding a New Language
 
 ### No custom logic (lsp_settings only)

@@ -81,7 +81,7 @@ function Provider:expand_category(category_name)
 end
 
 -- Default apply_config: subclasses must override this.
-function Provider:apply_config(current_state)
+function Provider:apply_config(current_state, bufnr)
   error("Provider '" .. self.name .. "' must implement apply_config()")
 end
 
@@ -89,7 +89,7 @@ end
 -- Override in subclasses that write config files (e.g. clangd writes .clangd).
 -- Providers that only push lsp_settings don't persist state to disk, so there's
 -- nothing to read back — the LSP's current settings are the source of truth.
-function Provider:sync_state_from_files(ft_state)
+function Provider:sync_state_from_files(buf_state, bufnr)
 end
 
 -- Default is_installed: check lsp_name executable.
@@ -98,10 +98,12 @@ function Provider:is_installed()
   return self.lsp_name and vim.fn.executable(self.lsp_name) == 1 or false
 end
 
--- Restart the LSP client by name.
-function Provider:restart_lsp()
+-- Restart the LSP client, scoped to the given buffer if provided.
+function Provider:restart_lsp(bufnr)
   if not self.lsp_name then return end
-  local clients = vim.lsp.get_clients({ name = self.lsp_name })
+  local opts = { name = self.lsp_name }
+  if bufnr then opts.bufnr = bufnr end
+  local clients = vim.lsp.get_clients(opts)
   for _, client in ipairs(clients) do
     -- false = graceful shutdown (sends LSP shutdown request before exit).
     -- true would send SIGKILL immediately, causing clangd to log exit code 1.
@@ -120,9 +122,11 @@ function Provider:restart_lsp()
 end
 
 -- Generic LSP settings apply: push settings_path key/value pairs via
--- workspace/didChangeConfiguration. Used by simple toggle/radio sections.
-function Provider:apply_lsp_settings(settings)
-  local clients = vim.lsp.get_clients({ bufnr = 0, name = self.lsp_name })
+-- workspace/didChangeConfiguration. Scoped to bufnr if provided.
+function Provider:apply_lsp_settings(settings, bufnr)
+  local opts = { name = self.lsp_name }
+  if bufnr then opts.bufnr = bufnr end
+  local clients = vim.lsp.get_clients(opts)
   if #clients == 0 then
     return { success = true, message = self.lsp_name .. " not running — settings apply on next open" }
   end

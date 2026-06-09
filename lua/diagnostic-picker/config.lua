@@ -7,6 +7,10 @@ M.defaults = {
   debug = false,
   debug_file = "/tmp/diagnostic-picker-debug.log",
 
+  -- Which severities are enabled on startup. All off by default; override in setup().
+  -- Which severities to show on startup. Keys match vim.diagnostic.severity names.
+  severities = { ERROR = false, WARN = false, INFO = false, HINT = false },
+
   -- UI configuration
   icons = {
     global_config = "🌍",

@@ -11,7 +11,7 @@ function PylspProvider.new(config)
   return setmetatable(self, PylspProvider)
 end
 
-function PylspProvider:get_categories()
+function PylspProvider:get_categories(bufnr)
   local categories = {}
   for _, section in ipairs(self.sections) do
     if section.kind == "category" then
@@ -23,21 +23,25 @@ function PylspProvider:get_categories()
   return categories
 end
 
-function PylspProvider:apply_config(current_state)
-  local ft_state = current_state["python"] or {}
+-- apply_config: push settings to pylsp via LSP.
+-- current_state is the full state table (keyed by bufnr or ft string).
+-- bufnr: the buffer that was active when the picker opened.
+function PylspProvider:apply_config(current_state, bufnr)
+  -- Prefer bufnr key; fall back to "python" ft string for backward compat
+  local buf_state = (bufnr and current_state[bufnr]) or current_state["python"] or {}
   local plugins  = {}
 
   for _, section in ipairs(self.sections) do
     if section.apply_to == "lsp_settings" and section.kind == "toggle" then
       for _, item in ipairs(section.items or {}) do
-        local enabled = ft_state[item.name]
+        local enabled = buf_state[item.name]
         if enabled == nil then enabled = item.default ~= false end
         plugins[item.name] = { enabled = enabled }
       end
     end
   end
 
-  return self:apply_lsp_settings({ pylsp = { plugins = plugins } })
+  return self:apply_lsp_settings({ pylsp = { plugins = plugins } }, bufnr)
 end
 
 function PylspProvider:is_installed()

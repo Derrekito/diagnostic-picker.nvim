@@ -70,7 +70,7 @@
         { "name": "boost-*",             "desc": "Boost" },
         { "name": "android-*",           "desc": "Android" },
         { "name": "fuchsia-*",           "desc": "Fuchsia" },
-        { "name": "linuxkernel-*",       "desc": "Linux Kernel" },
+        { "name": "linuxkernel-must-check-errs", "desc": "Linux Kernel" },
         { "name": "mpi-*",               "desc": "MPI" },
         { "name": "openmp-*",            "desc": "OpenMP" },
         { "name": "zircon-*",            "desc": "Zircon" }
