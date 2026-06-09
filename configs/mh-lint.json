@@ -1,0 +1,93 @@
+{
+  "provider": "mh_lint",
+  "lsp_name": null,
+  "filetypes": ["matlab"],
+  "sections": [
+    {
+      "id": "dialect",
+      "title": "Language Dialect",
+      "kind": "radio",
+      "apply_to": "cfg_file",
+      "items": [
+        { "name": "matlab", "desc": "MATLAB (latest)", "default": true },
+        { "name": "octave", "desc": "GNU Octave (latest)" }
+      ]
+    },
+    {
+      "id": "lint_checks",
+      "title": "Lint Checks",
+      "kind": "toggle",
+      "apply_to": "cfg_file",
+      "items": [
+        { "name": "builtin_shadow",              "desc": "Shadowing built-in functions",    "default": true },
+        { "name": "implicit_shortcircuit",        "desc": "Implicit short-circuit in guards","default": true }
+      ]
+    },
+    {
+      "id": "whitespace_rules",
+      "title": "Whitespace Rules",
+      "kind": "toggle",
+      "apply_to": "cfg_file",
+      "items": [
+        { "name": "whitespace_comma",             "desc": "Spacing around commas",           "default": true },
+        { "name": "whitespace_semicolon",         "desc": "Spacing around semicolons",       "default": true },
+        { "name": "whitespace_colon",             "desc": "Spacing around colons",           "default": true },
+        { "name": "whitespace_assignment",        "desc": "Spacing around =",                "default": true },
+        { "name": "whitespace_brackets",          "desc": "No space inside ()/[]",           "default": true },
+        { "name": "whitespace_keywords",          "desc": "Space after if/for/etc",          "default": true },
+        { "name": "whitespace_comments",          "desc": "Space before/in comments",        "default": true },
+        { "name": "whitespace_continuation",      "desc": "Space before ...",                "default": true },
+        { "name": "whitespace_around_functions",  "desc": "Blank lines around functions",    "default": true },
+        { "name": "operator_whitespace",          "desc": "Spacing around operators",        "default": true },
+        { "name": "annotation_whitespace",        "desc": "Space after %|",                  "default": true }
+      ]
+    },
+    {
+      "id": "style_rules",
+      "title": "Style Rules",
+      "kind": "toggle",
+      "apply_to": "cfg_file",
+      "items": [
+        { "name": "line_length",                  "desc": "Max line length (default 80)",    "default": true },
+        { "name": "file_length",                  "desc": "Max file length (default 1000)",  "default": true },
+        { "name": "indentation",                  "desc": "Consistent indentation",          "default": true },
+        { "name": "no_starting_newline",          "desc": "No leading blank lines",          "default": true },
+        { "name": "end_of_statements",            "desc": "Consistent statement endings",    "default": true },
+        { "name": "redundant_brackets",           "desc": "Unnecessary brackets",            "default": true },
+        { "name": "spurious_row_comma",           "desc": "Trailing commas in matrices",     "default": true },
+        { "name": "spurious_row_semicolon",       "desc": "Trailing semicolons in matrices", "default": true },
+        { "name": "operator_after_continuation",  "desc": "Operators after ...",             "default": true },
+        { "name": "dangerous_continuation",       "desc": "Misleading line continuations",   "default": true },
+        { "name": "useless_continuation",         "desc": "Unnecessary ...",                 "default": true },
+        { "name": "unicode",                      "desc": "Non-conforming characters",       "default": true },
+        { "name": "force_newlines",               "desc": "Consistent newline style",        "default": true },
+        { "name": "copyright_notice",             "desc": "Copyright header required",       "default": false }
+      ]
+    },
+    {
+      "id": "naming_rules",
+      "title": "Naming Conventions",
+      "kind": "toggle",
+      "apply_to": "cfg_file",
+      "items": [
+        { "name": "naming_functions",             "desc": "Function/method names",           "default": true },
+        { "name": "naming_scripts",               "desc": "Script file names",               "default": true },
+        { "name": "naming_parameters",            "desc": "Parameter names",                 "default": true },
+        { "name": "naming_classes",               "desc": "Class names",                     "default": true },
+        { "name": "naming_enumerations",          "desc": "Enumeration names",               "default": true }
+      ]
+    },
+    {
+      "id": "metrics",
+      "title": "Code Metrics",
+      "kind": "toggle",
+      "apply_to": "cfg_file",
+      "items": [
+        { "name": "file_length_metric",           "desc": "File line count",                 "default": true },
+        { "name": "function_length",              "desc": "Function line count",             "default": true },
+        { "name": "npath",                        "desc": "Path complexity",                 "default": true },
+        { "name": "cnest",                        "desc": "Control nesting depth",           "default": true }
+      ]
+    }
+  ]
+}
