@@ -41,11 +41,17 @@ M.init_buf_state = function(bufnr, provider)
   M.state[bufnr] = {}
   if not provider then return end
   for _, section in ipairs(provider.sections or {}) do
-    for _, item in ipairs(section.items or {}) do
-      if section.kind == "radio" then
-        -- Radio defaults are tracked per-section via __<section_id>, not per-item
-      else
-        M.state[bufnr][item.name] = item.default ~= false
+    local items = section.items or {}
+    if #items == 0 and section.kind == "category" then
+      -- Flat category section: the section itself is the toggle, keyed by section.id
+      M.state[bufnr][section.id] = section.default ~= false
+    else
+      for _, item in ipairs(items) do
+        if section.kind == "radio" then
+          -- Radio defaults are tracked per-section via __<section_id>, not per-item
+        else
+          M.state[bufnr][item.name] = item.default ~= false
+        end
       end
     end
   end

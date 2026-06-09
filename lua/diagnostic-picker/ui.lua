@@ -73,9 +73,31 @@ M.make_entry = function(entry, provider)
         hl_group = "DiagnosticError",
       }
     end
-    local enabled = state.is_enabled(entry.bufnr, entry.name)
+    -- Derive enabled state from children when category is expandable.
+    -- A category is "on" only if every child item is enabled.
+    local enabled
+    if entry.expandable and provider and provider.expand_category then
+      local checks = provider:expand_category(entry.name)
+      if #checks > 0 then
+        enabled = true
+        for _, check in ipairs(checks) do
+          local check_name = check.name or check
+          if not state.is_enabled(entry.bufnr, check_name) then
+            enabled = false
+            break
+          end
+        end
+      else
+        enabled = state.is_enabled(entry.bufnr, entry.name)
+      end
+    else
+      enabled = state.is_enabled(entry.bufnr, entry.name)
+    end
     local expanded = state.is_expanded(entry.name)
-    local expand_icon = entry.expandable and (expanded and "[-] " or "[+] ") or ""
+    -- Show [-]/[+] only for expandable categories; auto_expand ones start open
+    local auto_open = entry.auto_expand and state.state.expanded[entry.name] == nil
+    local is_open = expanded or auto_open
+    local expand_icon = entry.expandable and (is_open and "[-] " or "[+] ") or ""
     local prefix = enabled and "[✓] " or "[ ] "
     local desc = entry.desc and (" - " .. entry.desc) or ""
     local config_source = entry.config_source or ""
@@ -159,8 +181,9 @@ M.build_items = function(ft, provider, force_expand, bufnr)
           not_installed = cat.not_installed,
         })
 
-        -- If expanded (or force_expand for filtering), add individual checks
-        if (force_expand or state.is_expanded(cat.name)) and provider.expand_category then
+        -- If expanded (or auto_expand and not explicitly collapsed, or force_expand), add individual checks
+        local auto_open = cat.auto_expand and state.state.expanded[cat.name] == nil
+        if (force_expand or auto_open or state.is_expanded(cat.name)) and provider.expand_category then
           local checks = provider:expand_category(cat.name)
           for _, check in ipairs(checks) do
             table.insert(items, {

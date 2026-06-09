@@ -51,6 +51,52 @@ function Provider:get_sections()
   return self.sections
 end
 
+-- Default get_categories: return each category section as a single expandable row.
+-- The section title is the category name; its items appear on expand.
+-- Providers with dynamic availability checks (e.g. clangd) override this.
+function Provider:get_categories(bufnr)
+  local categories = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "category" then
+      table.insert(categories, {
+        name        = section.title,
+        desc        = section.desc,
+        expandable  = section.expandable ~= false,
+        auto_expand = section.auto_expand == true,
+      })
+    end
+  end
+  return categories
+end
+
+-- Default get_language_options: return radio + toggle sections for the UI.
+function Provider:get_language_options(bufnr)
+  local state = require("diagnostic-picker.state")
+  local buf_state = (bufnr and state.state[bufnr]) or {}
+  local opts = {}
+  for _, section in ipairs(self.sections) do
+    if section.kind == "radio" or section.kind == "toggle" then
+      for _, item in ipairs(section.items or {}) do
+        local is_selected
+        if section.kind == "radio" then
+          is_selected = item.name == self:get_radio_selection(buf_state, section)
+        else
+          local val = buf_state[item.name]
+          is_selected = val == nil and item.default ~= false or val == true
+        end
+        table.insert(opts, {
+          kind        = section.kind,
+          group       = section.title,
+          name        = item.name,
+          desc        = item.desc,
+          is_selected = is_selected,
+        })
+      end
+    end
+  end
+  return opts
+end
+
 -- Return all items in a section by id (for expand_category fallback)
 function Provider:get_section_items(section_id)
   local section = self._section_by_id[section_id]
@@ -64,25 +110,100 @@ function Provider:get_item_section(item_name)
   return entry and entry.section or nil
 end
 
--- Default expand_category: return items from the matching category section.
--- Providers with dynamic expansion (e.g. clangd shelling out to clang-tidy) override this.
+-- Default expand_category: for a section whose title matches category_name,
+-- return all its items as expandable checks. Providers with dynamic expansion
+-- (e.g. clangd shelling out to clang-tidy) override this.
 function Provider:expand_category(category_name)
   for _, section in ipairs(self.sections) do
-    if section.kind == "category" then
+    if section.kind == "category" and section.title == category_name then
+      local result = {}
       for _, item in ipairs(section.items or {}) do
-        if item.name == category_name then
-          -- Static items have no children; dynamic providers override this method
-          return {}
-        end
+        table.insert(result, { name = item.name, config_source = "" })
       end
+      return result
     end
   end
   return {}
 end
 
--- Default apply_config: subclasses must override this.
+-- ── Shared helpers ───────────────────────────────────────────────────────────
+
+-- Return the selected item name for a radio section.
+function Provider:get_radio_selection(buf_state, section)
+  local selected = buf_state["__" .. section.id]
+  if not selected then
+    for _, i in ipairs(section.items or {}) do
+      if i.default then selected = i.name; break end
+    end
+    selected = selected or (section.items[1] and section.items[1].name)
+  end
+  return selected
+end
+
+-- Return names of items in a section that are currently disabled.
+function Provider:collect_disabled(buf_state, section_id)
+  local section = self._section_by_id[section_id]
+  if not section then return {} end
+  local result = {}
+  for _, item in ipairs(section.items or {}) do
+    local val = buf_state[item.name]
+    if val == nil then val = item.default ~= false end
+    if not val then table.insert(result, item.name) end
+  end
+  return result
+end
+
+-- Return names of items in a section that are currently enabled.
+function Provider:collect_enabled(buf_state, section_id)
+  local section = self._section_by_id[section_id]
+  if not section then return {} end
+  local result = {}
+  for _, item in ipairs(section.items or {}) do
+    local val = buf_state[item.name]
+    if val == nil then val = item.default ~= false end
+    if val then table.insert(result, item.name) end
+  end
+  return result
+end
+
+-- Default apply_config: builds LSP settings from all lsp_settings sections and
+-- pushes them via workspace/didChangeConfiguration. Works for any provider whose
+-- JSON sections all use apply_to=lsp_settings. Subclasses that write config files
+-- (e.g. clangd) override this.
 function Provider:apply_config(current_state, bufnr)
-  error("Provider '" .. self.name .. "' must implement apply_config()")
+  local buf_state = (bufnr and current_state[bufnr]) or {}
+  local settings = {}
+
+  for _, section in ipairs(self.sections) do
+    if section.apply_to == "lsp_settings" and section.settings_path then
+      local node = settings
+      -- Walk/create nested tables from dot-separated settings_path
+      for part in section.settings_path:gmatch("[^.]+") do
+        node[part] = node[part] or {}
+        node = node[part]
+      end
+      if section.kind == "toggle" then
+        for _, item in ipairs(section.items or {}) do
+          local val = buf_state[item.name]
+          if val == nil then val = item.default ~= false end
+          node[item.name] = val
+        end
+      elseif section.kind == "radio" then
+        local selected = self:get_radio_selection(buf_state, section)
+        local parent_path, key = section.settings_path:match("^(.+)%.([^.]+)$")
+        if parent_path and key then
+          local p = settings
+          for part in parent_path:gmatch("[^.]+") do
+            p[part] = p[part] or {}
+            p = p[part]
+          end
+          p[key] = selected
+        end
+      end
+    end
+  end
+
+  return self:apply_lsp_settings(settings, bufnr)
 end
 
 -- Default sync_state_from_files: no-op.

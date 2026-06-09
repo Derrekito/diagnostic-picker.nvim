@@ -46,13 +46,9 @@ local function instantiate(config)
   if cls then
     return cls.new(config)
   end
-  -- Fallback: generic provider that can only push lsp_settings sections
+  -- Fallback: use base provider directly — its default apply_config handles lsp_settings
   local Provider = require("diagnostic-picker.provider_base")
-  local instance = Provider.new(config)
-  instance.apply_config = function(self, current_state)
-    return self:_generic_apply(current_state)
-  end
-  return instance
+  return Provider.new(config)
 end
 
 -- Register a provider instance for all its filetypes.

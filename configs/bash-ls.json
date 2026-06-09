@@ -8,7 +8,7 @@
       "title": "ShellCheck",
       "kind": "toggle",
       "apply_to": "lsp_settings",
-      "settings_path": "bashls.shellcheckArguments",
+      "settings_path": "shellcheck",
       "items": [
         { "name": "SC2034", "desc": "Unused variables",               "default": true },
         { "name": "SC2046", "desc": "Quote command substitution",     "default": true },
