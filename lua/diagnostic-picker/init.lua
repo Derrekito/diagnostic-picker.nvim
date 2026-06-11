@@ -9,10 +9,28 @@ local state = require("diagnostic-picker.state")
 -- Setup function (called by user in config)
 M.setup = function(opts)
   config.setup(opts or {})
-  provider_registry.load_providers()
+  local log = require("diagnostic-picker.log")
+
+  local ok, err = pcall(provider_registry.load_providers)
+  if not ok then
+    log.error("failed to load providers: " .. tostring(err))
+  else
+    log.debug("providers loaded")
+  end
+
   -- Apply severity defaults immediately so diagnostics reflect config on startup
   state.init_severities()
   require("diagnostic-picker").apply_config()
+
+  -- :DiagnosticPickerDebug — print where the current buffer's state comes from
+  -- (resolved root, .clangd vs JSON defaults, per-category source). Works whether
+  -- or not file logging (config.debug) is enabled.
+  vim.api.nvim_create_user_command("DiagnosticPickerDebug", function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local provider = provider_registry.get_for_filetype(vim.bo[bufnr].filetype)
+    local lines = log.report_config_source(provider, bufnr)
+    vim.api.nvim_echo(vim.tbl_map(function(l) return { l .. "\n" } end, lines), true, {})
+  end, { desc = "diagnostic-picker: report config source (file vs defaults) for current buffer" })
 end
 
 -- Show the diagnostic picker
@@ -51,11 +69,10 @@ local function apply_severities(bufnr)
     diag_opts = { signs = false, underline = false }
   end
 
-  if bufnr then
-    vim.diagnostic.config(diag_opts, bufnr)
-  else
-    vim.diagnostic.config(diag_opts)
-  end
+  -- vim.diagnostic.config's 2nd arg is a NAMESPACE id, not a buffer. Passing a
+  -- bufnr errors on Neovim 0.12 ("namespace does not exist"), which crashed
+  -- save_config before it could write .clangd. These opts are global; no 2nd arg.
+  vim.diagnostic.config(diag_opts)
 end
 
 -- Enter in picker: apply severity filter for this session only.
@@ -69,14 +86,19 @@ M.apply_config = function(bufnr)
 end
 
 -- Write provider config to disk and restart the LSP.
--- bufnr: the buffer that was active when the picker opened (nil = current buf)
+-- bufnr: the buffer that was active when the picker opened. nil = resolve like
+-- the picker does (current buffer, falling back past sidebar windows).
 -- Bind to a key of your choice, e.g.:
 --   vim.keymap.set("n", "<leader>dG", require("diagnostic-picker").save_config)
 M.save_config = function(bufnr)
-  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local ft
+  if bufnr then
+    ft = vim.bo[bufnr].filetype
+  else
+    bufnr, ft = provider_registry.resolve_target_buf()
+  end
   apply_severities(bufnr)
 
-  local ft = vim.bo[bufnr].filetype
   local provider = provider_registry.get_for_filetype(ft)
 
   if provider and provider.apply_config then

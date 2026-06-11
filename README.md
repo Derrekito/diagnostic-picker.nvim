@@ -15,7 +15,7 @@ A language-agnostic Neovim plugin for managing LSP diagnostic settings via a Tel
 
 | Language | Provider | Config written |
 |----------|----------|----------------|
-| C/C++    | clangd   | `.clangd` (CompileFlags + ClangTidy) |
+| C/C++    | clangd   | `.clangd` (CompileFlags + ClangTidy; manual settings via `.clangd-user.yaml`) |
 | Python   | pylsp    | LSP `workspace/didChangeConfiguration` |
 | Lua      | lua-ls   | LSP `workspace/didChangeConfiguration` |
 | Bash/Zsh | bash-ls  | LSP `workspace/didChangeConfiguration` |
@@ -63,6 +63,32 @@ A language-agnostic Neovim plugin for managing LSP diagnostic settings via a Tel
 6. Type to filter — collapsed categories are searched too
 7. `Enter` — write config and restart LSP
 8. `Esc` — close without changes
+
+### Manual clangd settings (`.clangd-user.yaml`)
+
+The generated `.clangd` is fully picker-owned and rewritten on every apply —
+**do not hand-edit it**. Put manual settings (include paths, `InlayHints:`,
+`Index:`, extra checks, anything the picker has no UI for) in
+`<project-root>/.clangd-user.yaml` instead:
+
+```yaml
+CompileFlags:
+  Add:
+    - "-I/opt/include"
+InlayHints:
+  Enabled: true
+```
+
+On every apply the user file is appended to `.clangd` verbatim as a second
+YAML document; clangd merges the fragments additively. Saving
+`.clangd-user.yaml` re-imports it immediately (no need to reopen the picker).
+
+Notes:
+- A pre-existing hand-written `.clangd` is migrated into `.clangd-user.yaml`
+  automatically on first apply — nothing is lost.
+- The picker stays authoritative for the flags it manages (`-std=`, the `-W`
+  toggles): its `CompileFlags.Remove` list strips them even if re-added in
+  the user file. Hand-edit only what the UI doesn't control.
 
 ## Configuration
 

@@ -28,8 +28,10 @@ describe("state.init_ft_state", function()
     local s = reload("diagnostic-picker.state")
     local p = make_provider()
     s.init_ft_state("cpp", p)
-    assert.is_true(s.state["cpp"]["modernize-*"])
+    -- Category items honor their per-item default: bugprone-* is on,
+    -- modernize-* is intentionally off (default=false in clangd.json).
     assert.is_true(s.state["cpp"]["bugprone-*"])
+    assert.is_false(s.state["cpp"]["modernize-*"])
   end)
 
   it("is a no-op when called a second time", function()

@@ -96,4 +96,21 @@ M.has_provider = function(ft)
   return M.registry[ft] ~= nil
 end
 
+-- Resolve the buffer the picker should target. The focused window is often a
+-- sidebar (nvim-tree, terminal, quickfix) whose filetype has no provider; in
+-- that case fall back to the first window on the current tabpage whose
+-- buffer's filetype does. Returns bufnr, ft (the current buffer's if nothing
+-- on the tabpage matches).
+M.resolve_target_buf = function()
+  local cur = vim.api.nvim_get_current_buf()
+  local cur_ft = vim.bo[cur].filetype
+  if M.registry[cur_ft] then return cur, cur_ft end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    local ft = vim.bo[buf].filetype
+    if M.registry[ft] then return buf, ft end
+  end
+  return cur, cur_ft
+end
+
 return M

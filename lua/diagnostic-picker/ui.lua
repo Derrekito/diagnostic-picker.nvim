@@ -73,26 +73,12 @@ M.make_entry = function(entry, provider)
         hl_group = "DiagnosticError",
       }
     end
-    -- Derive enabled state from children when category is expandable.
-    -- A category is "on" only if every child item is enabled.
-    local enabled
-    if entry.expandable and provider and provider.expand_category then
-      local checks = provider:expand_category(entry.name)
-      if #checks > 0 then
-        enabled = true
-        for _, check in ipairs(checks) do
-          local check_name = check.name or check
-          if not state.is_enabled(entry.bufnr, check_name) then
-            enabled = false
-            break
-          end
-        end
-      else
-        enabled = state.is_enabled(entry.bufnr, entry.name)
-      end
-    else
-      enabled = state.is_enabled(entry.bufnr, entry.name)
-    end
+    -- A category's checkbox reflects its OWN key (e.g. "bugprone-*"). This is the
+    -- single source of truth: sync_state_from_files sets it from .clangd, toggle
+    -- flips it, and apply_config writes it back. (Previously this derived state
+    -- from individual child checks, which sync never populates — so categories
+    -- wrongly rendered off/on regardless of the file.)
+    local enabled = state.is_enabled(entry.bufnr, entry.name)
     local expanded = state.is_expanded(entry.name)
     -- Show [-]/[+] only for expandable categories; auto_expand ones start open
     local auto_open = entry.auto_expand and state.state.expanded[entry.name] == nil
@@ -250,9 +236,11 @@ M.show = function(opts)
     initial_mode = "normal",
   })
 
-  -- Get current buffer and filetype BEFORE opening picker
-  local original_bufnr = vim.api.nvim_get_current_buf()
-  local original_ft = vim.bo[original_bufnr].filetype
+  -- Resolve the target buffer BEFORE opening the picker. The focused window
+  -- may be a sidebar (nvim-tree, terminal, quickfix) whose filetype has no
+  -- provider; resolve_target_buf falls back to the first window on this
+  -- tabpage whose buffer's filetype does.
+  local original_bufnr, original_ft = provider_registry.resolve_target_buf()
   local provider = provider_registry.get_for_filetype(original_ft)
 
   state.init_severities()
@@ -283,7 +271,7 @@ M.show = function(opts)
   end
 
   pickers.new(opts, {
-    prompt_title = "Diagnostic Settings (Space=toggle, Tab=expand, Enter=apply session, gs=save to disk)",
+    prompt_title = "Diagnostic Settings (Space=toggle, Tab=expand, Enter=close & choose save, Esc=cancel)",
     finder = make_finder(false),
     sorter = conf.generic_sorter(opts),
     selection_strategy = "row",
@@ -303,16 +291,29 @@ M.show = function(opts)
         end,
       })
 
-      -- Enter: apply session-only (no file write)
+      -- On Enter: close the picker, then ask whether to persist to .clangd.
+      --   Yes -> save_config (writes .clangd + restarts clangd)
+      --   No  -> apply_config (session only — changes apply now but aren't saved)
+      --   Cancel -> do nothing
+      -- The confirm() is deferred (vim.schedule) so it runs AFTER telescope has
+      -- fully closed; calling confirm() directly inside the mapping callback
+      -- raises E5108 "Keyboard interrupt" when the dialog is cancelled.
+      -- Esc is intentionally NOT mapped here: it keeps its normal telescope
+      -- behaviour (insert -> normal mode, then close), so filtering still works.
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
-        require("diagnostic-picker").apply_config(original_bufnr)
-      end)
-
-      -- gs: save to disk + restart LSP
-      map("n", "gs", function()
-        actions.close(prompt_bufnr)
-        require("diagnostic-picker").save_config(original_bufnr)
+        vim.schedule(function()
+          local dp = require("diagnostic-picker")
+          local ok, choice = pcall(vim.fn.confirm,
+            "Save diagnostic settings to .clangd?",
+            "&Yes\n&No (session only)\n&Cancel", 1)
+          if not ok then return end  -- dialog interrupted; leave state as-is
+          if choice == 1 then
+            dp.save_config(original_bufnr)
+          elseif choice == 2 then
+            dp.apply_config(original_bufnr)
+          end
+        end)
       end)
 
       -- Space to toggle selection (normal mode)
