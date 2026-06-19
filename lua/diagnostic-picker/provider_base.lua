@@ -231,13 +231,19 @@ function Provider:restart_lsp(bufnr)
     vim.lsp.stop_client(client.id, false)
   end
   -- Delay restart to give the client time to finish shutting down.
-  -- LspStart is provided by nvim-lspconfig; fall back to :edit which
-  -- triggers FileType autocmds and causes lspconfig to re-attach.
+  -- LspStart is provided by nvim-lspconfig; fall back to re-firing the
+  -- FileType autocmds, which causes lspconfig to re-attach. We avoid bare
+  -- :edit here because it reloads the buffer and fails with E37 when there
+  -- are unsaved changes; :edit! would discard the user's edits instead.
   vim.defer_fn(function()
     if vim.fn.exists(":LspStart") == 2 then
       vim.cmd("LspStart " .. self.lsp_name)
     else
-      vim.cmd("edit")
+      local target = bufnr or vim.api.nvim_get_current_buf()
+      if vim.api.nvim_buf_is_valid(target) then
+        local ft = vim.bo[target].filetype
+        vim.api.nvim_exec_autocmds("FileType", { buffer = target, modeline = false, data = { filetype = ft } })
+      end
     end
   end, 500)
 end
